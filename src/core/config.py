@@ -11,6 +11,14 @@ class Settings(BaseSettings):
     port: int = 8001
     log_level: str = "INFO"
     internal_api_key: str = DEV_INTERNAL_KEY
+    openrouter_api_key: str = ""
+    openrouter_model: str = "anthropic/claude-3.5-haiku"
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_timeout_seconds: float = 12
+    openrouter_app_url: str = ""
+    openrouter_provider_sort: str = ""
+    openrouter_provider_order: str = ""
+    openrouter_allow_fallbacks: bool = True
 
     @property
     def is_production(self) -> bool:
