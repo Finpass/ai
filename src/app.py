@@ -6,6 +6,7 @@ from src.core.config import settings
 from src.core.envelope import Success
 from src.core.error_handler import add_error_handlers
 from src.core.request_context import RequestContextMiddleware
+from src.features.profile.router import router as profile_router
 from src.features.textstats.router import router as textstats_router
 
 logging.basicConfig(
@@ -17,6 +18,7 @@ app.add_middleware(RequestContextMiddleware)
 add_error_handlers(app)
 
 app.include_router(textstats_router)
+app.include_router(profile_router)
 
 
 @app.get("/health", tags=["health"], response_model=Success[None])
