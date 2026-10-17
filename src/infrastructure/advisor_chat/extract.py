@@ -1,16 +1,10 @@
 import re
-from dataclasses import dataclass
 
 import pdfplumber
 
+from src.domain.advisor_chat.documents import Page
+
 _NUM = re.compile(r"^\(?-?[\d.,]+\)?%?$")
-
-
-@dataclass(frozen=True)
-class Page:
-    number: int
-    text: str
-    has_table: bool
 
 
 def _tabular(text: str) -> bool:

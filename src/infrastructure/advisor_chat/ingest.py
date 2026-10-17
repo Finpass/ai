@@ -1,6 +1,6 @@
 """Ingest PDFs from R2 into pgvector. Resumable: files whose etag is already stored are skipped.
 
-python -m src.features.rag.ingest --prefix ojk-regulasi/ [--limit N] [--force]
+python -m src.infrastructure.advisor_chat.ingest --prefix ojk-regulasi/ [--limit N] [--force]
 """
 
 import argparse
@@ -10,7 +10,8 @@ import tempfile
 import time
 from concurrent.futures import ProcessPoolExecutor
 
-from src.features.rag import chunking, embedder, extract, meta, r2, store
+from src.domain.advisor_chat import chunking, meta
+from src.infrastructure.advisor_chat import embedder, extract, r2, store
 
 logger = logging.getLogger("rag.ingest")
 

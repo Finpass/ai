@@ -14,6 +14,22 @@ class ProfileCtx(BaseModel):
     sharia: str = "no"
     horizonYears: float = 0
     goal: str | None = None
+    goalAmountIDR: int | None = None
+    incomeIDR: int | None = None
+    expensesIDR: int | None = None
+    surplusIDR: int | None = None
+    installmentIDR: int | None = None
+    savingsIDR: int | None = None
+    investableIDR: int | None = None
+    dependents: int | None = None
+    employment: str | None = None
+    knowledge: str | None = None
+    emergencyMonths: float | None = None
+    emergencyTargetMonths: float | None = None
+    healthCategory: str | None = None
+    healthScore: float | None = None
+    heldKinds: list[str] = []
+    priorities: list[str] = []
 
 
 class HoldingCtx(BaseModel):
@@ -21,6 +37,7 @@ class HoldingCtx(BaseModel):
     name: str = ""
     assetClass: str = ""
     weightPct: float = 0
+    valueIDR: int = 0
 
 
 class RecAsset(BaseModel):
@@ -36,10 +53,42 @@ class RecClass(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class CompareCtx(BaseModel):
+    """Rule outcome for one product the user asked to compare; the model explains it, never changes it."""
+
+    symbol: str
+    name: str = ""
+    cls: str = Field(default="", alias="class")
+    eligible: bool = True
+    gate: str = ""
+    score: float = 0
+    rank: int = 0
+    return1y: float = 0
+    volatility: float = 0
+    sharpe: float | None = None
+    divYield: float | None = None
+    per: float | None = None
+    pbv: float | None = None
+
+    model_config = {"populate_by_name": True}
+
+
+class NewsCtx(BaseModel):
+    """A recent market article the backend picked; the advisor may cite it when documents fall short."""
+
+    title: str
+    source: str = ""
+    url: str = ""
+    publishedAt: str = ""
+    summary: str = Field(default="", max_length=1200)
+
+
 class UserContext(BaseModel):
     profile: ProfileCtx | None = None
     holdings: list[HoldingCtx] = []
     recommended: list[RecClass] = []
+    comparison: list[CompareCtx] = Field(default=[], max_length=4)
+    news: list[NewsCtx] = Field(default=[], max_length=8)
 
 
 class ChatRequest(BaseModel):
@@ -53,9 +102,10 @@ class ChatRequest(BaseModel):
 class Citation(BaseModel):
     n: int
     title: str
-    page: int
+    page: int | None = None
     sourceType: str
     key: str
+    url: str | None = None
 
 
 class Trace(BaseModel):

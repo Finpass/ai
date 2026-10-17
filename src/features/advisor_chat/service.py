@@ -3,13 +3,19 @@ import logging
 import uuid
 
 from src.core.config import settings
-from src.features.rag import guardrail, prompt, retrieval, store
-from src.features.rag.retrieval import Passage
-from src.features.rag.schemas import ChatRequest, ChatResponse, Citation, Trace, Turn_
+from src.domain.advisor_chat import facts, guardrail
+from src.domain.advisor_chat.documents import Passage
+from src.domain.advisor_chat.schemas import ChatRequest, ChatResponse, Citation, Trace, Turn_
+from src.infrastructure.advisor_chat import retrieval, store
+from src.infrastructure.observability.narrator import Narrator
 from src.infrastructure.observability.turns import dump, turn_buffer
 from src.infrastructure.openrouter import LLMError, OpenRouterClient
+from src.infrastructure.prompt.loader import load
 
 logger = logging.getLogger("rag.service")
+
+# fewer matching documents than this and the news the backend attached may join the sources
+NEWS_WHEN_DOCS_BELOW = 3
 
 NOT_FOUND = {
     "id": "Saya tidak menemukan informasi yang relevan di sumber yang tersedia (regulasi dan edukasi OJK, laporan keuangan emiten). Coba tanyakan dengan kata kunci yang lebih spesifik.",
@@ -19,6 +25,19 @@ FALLBACK_HEAD = {
     "id": "Saya belum bisa menyusun jawaban yang lolos pemeriksaan. Berikut kutipan paling relevan dari sumber:",
     "en": "I could not compose an answer that passed the checks. Here are the most relevant excerpts from the sources:",
 }
+
+
+def _messages(req: ChatRequest, passages: list[Passage], fix: str = "") -> list[dict[str, str]]:
+    system = (
+        load(f"advisor_chat_system_{req.lang}")
+        + f"\n\nFAKTA USER:\n{facts.facts_text(req.userContext)}"
+        + f"\n\nKUTIPAN SUMBER:\n{facts.passages_text(passages)}"
+    )
+    msgs = [{"role": "system", "content": system}]
+    msgs += [{"role": t.role, "content": t.content} for t in req.history[-6:]]
+    suffix = f"\n\n(Perbaiki jawabanmu: {fix})" if fix else ""
+    msgs.append({"role": "user", "content": req.message + suffix})
+    return msgs
 
 
 def _query(req: ChatRequest) -> str:
@@ -45,9 +64,10 @@ def _citations(passages: list[Passage], used: list[int]) -> list[Citation]:
         Citation(
             n=n,
             title=passages[n - 1].title,
-            page=passages[n - 1].page,
+            page=passages[n - 1].page or None,
             sourceType=passages[n - 1].source_type,
             key=passages[n - 1].key,
+            url=passages[n - 1].key if passages[n - 1].key.startswith("http") else None,
         )
         for n in used
     ]
@@ -64,16 +84,24 @@ def _snippet(content: str, limit: int = 240) -> str:
 def _excerpts(passages: list[Passage], lang: str) -> str:
     lines = [FALLBACK_HEAD[lang], ""]
     for i, p in enumerate(passages[:3], 1):
-        lines.append(f"- {p.title}, hal. {p.page}: {_snippet(p.content)} [{i}]")
-    return "\n".join(lines)
+        page = f", hal. {p.page}" if p.page else ""
+        lines.append(f"- {p.title}{page}: {_snippet(p.content)} [{i}]")
+    return _with_note("\n".join(lines), lang)
 
 
+def _with_note(answer: str, lang: str) -> str:
+    """Every answer ends with the same fixed disclaimer, written by us and not by the model."""
+    return f"{answer}\n\n{load(f'advisor_chat_disclaimer_{lang}')}"
+
+
+# plain fallbacks: used when the model cannot write a title, or is not configured at all
 TITLES = {
     "id": {
         "read": "Memahami pertanyaan...",
         "search": "Mencari di sumber OJK dan laporan keuangan...",
         "found": "{n} kutipan relevan dipilih",
         "none": "Tidak ada kutipan yang relevan",
+        "news": "Mempertimbangkan {n} berita terbaru",
         "write": "Menyusun jawaban...",
         "recheck": "Memeriksa ulang angka dan sitasi...",
         "done": "Jawaban siap",
@@ -85,6 +113,7 @@ TITLES = {
         "search": "Searching OJK and financial statement sources...",
         "found": "{n} relevant excerpts selected",
         "none": "No relevant excerpts found",
+        "news": "Considering {n} recent news items",
         "write": "Writing the answer...",
         "recheck": "Re-checking numbers and citations...",
         "done": "Answer ready",
@@ -97,45 +126,77 @@ TITLES = {
 async def chat(req: ChatRequest, llm: OpenRouterClient | None) -> ChatResponse:
     """Runs the pipeline and attaches the turn trail (also readable live through the turn buffer)."""
     run = req.runId or str(uuid.uuid4())
-    title = TITLES[req.lang]
+    nar = Narrator(run, req.lang, req.message, llm)
     try:
-        resp = await _chat(req, llm, run, title)
+        resp = await _chat(req, llm, nar)
     except Exception:
-        turn_buffer.emit(run, title["error"], type="error", status="failed")
+        await nar.drain()
+        turn_buffer.emit(run, TITLES[req.lang]["error"], type="error", status="failed")
         raise
+    await nar.drain()
     resp.turns = [Turn_(**t) for t in dump(turn_buffer.read(run))]
     return resp
 
 
-def _finish(run: str, title: dict[str, str], resp: ChatResponse) -> ChatResponse:
+def _finish(nar: Narrator, lang: str, resp: ChatResponse) -> ChatResponse:
+    t = TITLES[lang]
     if resp.source == "llm":
-        turn_buffer.emit(run, title["done"], type="result", status="done")
+        nar.say(
+            "done", "jawaban selesai dan lolos pemeriksaan", t["done"], type="result", status="done"
+        )
     else:
-        turn_buffer.emit(
-            run, title["fallback"] if resp.grounded else title["none"], type="result", status="done"
+        kind = "fallback" if resp.grounded else "none"
+        nar.say(
+            "fallback",
+            "jawaban disusun dari kutipan sumber" if resp.grounded else "tidak ada kutipan relevan",
+            t[kind],
+            type="result",
+            status="done",
         )
     return resp
 
 
-async def _chat(
-    req: ChatRequest, llm: OpenRouterClient | None, run: str, title: dict[str, str]
-) -> ChatResponse:
-    turn_buffer.emit(run, title["read"])
-    turn_buffer.emit(run, title["search"])
-    passages, intent_name, tickers = await asyncio.to_thread(_search, req)
-    turn_buffer.emit(run, title["found"].format(n=len(passages)) if passages else title["none"])
+async def _chat(req: ChatRequest, llm: OpenRouterClient | None, nar: Narrator) -> ChatResponse:
+    t = TITLES[req.lang]
+    nar.say("read", f"pertanyaan user: {req.message}", t["read"])
+    nar.say(
+        "search", "mencari di regulasi dan edukasi OJK serta laporan keuangan emiten", t["search"]
+    )
+    docs, intent_name, tickers = await asyncio.to_thread(_search, req)
+    if docs:
+        names = "; ".join(p.title for p in docs[:3])
+        nar.say(
+            "found",
+            f"{len(docs)} kutipan dokumen dipilih, teratas: {names}",
+            t["found"].format(n=len(docs)),
+        )
+    else:
+        nar.say("found", "tidak ada dokumen yang cocok dengan pertanyaan", t["none"])
+    news = facts.news_passages(req.userContext.news) if len(docs) < NEWS_WHEN_DOCS_BELOW else []
+    if news:
+        names = "; ".join(p.title for p in news[:3])
+        nar.say(
+            "news",
+            f"dokumen kurang, memakai {len(news)} berita terbaru: {names}",
+            t["news"].format(n=len(news)),
+        )
+    passages = docs + news
     trace = Trace(
         intent=intent_name,
         tickers=tickers,
-        chunkIds=[p.chunk_id for p in passages],
-        topScore=round(passages[0].score, 3) if passages else 0.0,
+        chunkIds=[p.chunk_id for p in docs],
+        topScore=round(docs[0].score, 3) if docs else 0.0,
     )
-    has_facts = bool(req.userContext.profile or req.userContext.holdings)
+    has_facts = bool(
+        req.userContext.profile or req.userContext.holdings or req.userContext.comparison
+    )
     # nothing retrieved and the question is not about the user's own data: say so instead of guessing
-    if not passages and not (intent_name == "portofolio" and has_facts):
+    if not passages and not (
+        (intent_name == "portofolio" or req.userContext.comparison) and has_facts
+    ):
         return _finish(
-            run,
-            title,
+            nar,
+            req.lang,
             ChatResponse(
                 answer=NOT_FOUND[req.lang],
                 citations=[],
@@ -146,8 +207,8 @@ async def _chat(
         )
     if llm is None:
         return _finish(
-            run,
-            title,
+            nar,
+            req.lang,
             ChatResponse(
                 answer=_excerpts(passages, req.lang),
                 citations=_citations(passages, list(range(1, min(len(passages), 3) + 1))),
@@ -158,19 +219,23 @@ async def _chat(
         )
 
     allowed = (
-        prompt.facts_text(req.userContext)
+        facts.facts_text(req.userContext)
         + "\n"
-        + prompt.passages_text(passages)
+        + facts.passages_text(passages)
         + "\n"
         + req.message
     )
     fix = ""
     for attempt in range(2):
-        turn_buffer.emit(run, title["write"] if attempt == 0 else title["recheck"])
+        if attempt == 0:
+            used = f"{len(docs)} dokumen, {len(news)} berita, konteks personal user"
+            nar.say("write", f"menyusun jawaban dari {used}", t["write"])
+        else:
+            nar.say("recheck", f"jawaban pertama ditolak pemeriksaan: {fix}", t["recheck"])
         try:
             answer = (
                 await llm.complete(
-                    prompt.build(req, passages, fix),
+                    _messages(req, passages, fix),
                     json_mode=False,
                     max_tokens=700,
                     timeout_seconds=settings.rag_chat_timeout_seconds,
@@ -184,21 +249,22 @@ async def _chat(
             answer, allowed, len(passages), needs_citation=bool(passages) and not gap
         )
         if not bad:
-            used = guardrail.used_markers(answer, len(passages))
+            used_n = guardrail.used_markers(answer, len(passages))
+            answer = _with_note(answer, req.lang)
             if gap:
                 return _finish(
-                    run,
-                    title,
+                    nar,
+                    req.lang,
                     ChatResponse(
                         answer=answer, citations=[], grounded=False, source="llm", trace=trace
                     ),
                 )
             return _finish(
-                run,
-                title,
+                nar,
+                req.lang,
                 ChatResponse(
                     answer=answer,
-                    citations=_citations(passages, used),
+                    citations=_citations(passages, used_n),
                     grounded=bool(passages),
                     source="llm",
                     trace=trace,
@@ -208,8 +274,8 @@ async def _chat(
         fix = "; ".join(bad)
     if not passages:
         return _finish(
-            run,
-            title,
+            nar,
+            req.lang,
             ChatResponse(
                 answer=NOT_FOUND[req.lang],
                 citations=[],
@@ -219,8 +285,8 @@ async def _chat(
             ),
         )
     return _finish(
-        run,
-        title,
+        nar,
+        req.lang,
         ChatResponse(
             answer=_excerpts(passages, req.lang),
             citations=_citations(passages, list(range(1, min(len(passages), 3) + 1))),

@@ -1,45 +1,65 @@
-from src.features.rag.retrieval import Passage
-from src.features.rag.schemas import ChatRequest, UserContext
+from src.domain.advisor_chat.documents import Passage
+from src.domain.advisor_chat.schemas import NewsCtx, ProfileCtx, UserContext
 
-SYSTEM = {
-    "id": (
-        "Kamu adalah asisten edukasi keuangan Finpass. Jawab dalam bahasa Indonesia yang sederhana dan ringkas.\n"
-        "Aturan:\n"
-        "1. Jawab hanya dari FAKTA USER dan KUTIPAN SUMBER di bawah. Jangan memakai pengetahuan lain untuk angka atau klaim.\n"
-        "2. Setiap klaim dari sumber diberi penanda [n] sesuai nomor kutipan. Jangan menulis nomor yang tidak ada.\n"
-        "3. Salin angka persis seperti di fakta atau kutipan. Jangan menghitung ulang atau membulatkan.\n"
-        "4. Jangan memberi saran beli, jual, atau tahan, dan jangan menjanjikan hasil. Jelaskan saja, termasuk risiko dan trade-off.\n"
-        "5. Jika sumber tidak cukup, katakan terus terang bahwa informasinya tidak ditemukan di sumber.\n"
-        "6. Jika pertanyaan tentang profil atau portofolio user, jelaskan dari FAKTA USER tanpa penanda sumber.\n"
-        'Format: paragraf pendek; untuk beberapa poin pakai baris diawali "- " (satu poin per baris); letakkan penanda [n] di akhir kalimat. '
-        "Tulis teks biasa, tanpa markdown tebal dan tanpa emoji."
-    ),
-    "en": (
-        "You are Finpass's financial education assistant. Answer in plain, concise English.\n"
-        "Rules:\n"
-        "1. Answer only from USER FACTS and SOURCE EXCERPTS below. Do not use outside knowledge for numbers or claims.\n"
-        "2. Mark every claim taken from a source with [n] matching the excerpt number. Never write a number that does not exist.\n"
-        "3. Copy numbers exactly as in the facts or excerpts. Do not recompute or round.\n"
-        "4. Never advise to buy, sell, or hold, and never promise results. Just explain, including risks and trade-offs.\n"
-        "5. If the sources are not enough, say plainly that the information was not found in the sources.\n"
-        "6. If the question is about the user's profile or portfolio, explain from USER FACTS without source markers.\n"
-        'Format: short paragraphs; for several points use lines starting with "- " (one point per line); put [n] at the end of the sentence. '
-        "Plain text only, no bold markdown, no emoji."
-    ),
-}
+
+def _idr(v: int) -> str:
+    return "Rp " + f"{v:,}".replace(",", ".")
+
+
+def _profile_lines(p: ProfileCtx) -> list[str]:
+    head = (
+        f"Profil: risiko {p.riskProfile}, level tangga {p.ladderLevel}, syariah {p.sharia}, "
+        f"horizon {p.horizonYears:g} tahun"
+    )
+    if p.goal:
+        head += f", tujuan {p.goal}"
+    if p.goalAmountIDR:
+        head += f" senilai {_idr(p.goalAmountIDR)}"
+    lines = [head]
+    money = [
+        ("pendapatan per bulan", p.incomeIDR),
+        ("pengeluaran per bulan", p.expensesIDR),
+        ("surplus per bulan", p.surplusIDR),
+        ("cicilan per bulan", p.installmentIDR),
+        ("tabungan", p.savingsIDR),
+        ("dana yang bisa diinvestasikan", p.investableIDR),
+    ]
+    parts = [f"{k} {_idr(v)}" for k, v in money if v is not None]
+    if p.dependents is not None:
+        parts.append(f"tanggungan {p.dependents} orang")
+    if p.employment:
+        parts.append(f"pekerjaan {p.employment}")
+    if p.knowledge:
+        parts.append(f"pengetahuan investasi {p.knowledge}")
+    if parts:
+        lines.append("Keuangan: " + ", ".join(parts))
+    if p.emergencyMonths is not None:
+        target = (
+            f" dari target {p.emergencyTargetMonths:g} bulan" if p.emergencyTargetMonths else ""
+        )
+        lines.append(f"Dana darurat: {p.emergencyMonths:g} bulan pengeluaran{target}")
+    if p.healthCategory:
+        score = f" (skor {p.healthScore:g})" if p.healthScore is not None else ""
+        lines.append(f"Kesehatan finansial: {p.healthCategory}{score}")
+    if p.heldKinds:
+        lines.append("Jenis aset yang pernah dipegang: " + ", ".join(p.heldKinds))
+    if p.priorities:
+        lines.append("Prioritas: " + ", ".join(p.priorities))
+    return lines
 
 
 def facts_text(ctx: UserContext) -> str:
     lines: list[str] = []
-    if p := ctx.profile:
-        lines.append(
-            f"Profil: risiko {p.riskProfile}, level tangga {p.ladderLevel}, syariah {p.sharia}, horizon {p.horizonYears:g} tahun"
-            + (f", tujuan {p.goal}" if p.goal else "")
-        )
+    if ctx.profile:
+        lines += _profile_lines(ctx.profile)
     if ctx.holdings:
         lines.append(
             "Holdings: "
-            + "; ".join(f"{h.symbol} ({h.assetClass}) {h.weightPct:g}%" for h in ctx.holdings[:25])
+            + "; ".join(
+                f"{h.symbol or h.name} ({h.assetClass}) {h.weightPct:g}%"
+                + (f", nilai {_idr(h.valueIDR)}" if h.valueIDR else "")
+                for h in ctx.holdings[:25]
+            )
         )
     if ctx.recommended:
         parts = []
@@ -49,28 +69,51 @@ def facts_text(ctx: UserContext) -> str:
         lines.append(
             "Portofolio rekomendasi (pencocokan profil, bukan ajakan membeli): " + "; ".join(parts)
         )
+    if ctx.comparison:
+        lines.append("Perbandingan produk (hasil aturan profil, bukan ajakan membeli):")
+        for cmp in ctx.comparison:
+            status = (
+                f"lolos gate, peringkat {cmp.rank}" if cmp.eligible else f"tidak lolos {cmp.gate}"
+            )
+            extra = "".join(
+                f", {k} {v:g}"
+                for k, v in (
+                    ("sharpe", cmp.sharpe),
+                    ("dividen", cmp.divYield),
+                    ("PER", cmp.per),
+                    ("PBV", cmp.pbv),
+                )
+                if v is not None
+            )
+            lines.append(
+                f"- {cmp.symbol} ({cmp.cls}) skor {cmp.score:g}, {status}, return 1 tahun {cmp.return1y:g}%, volatilitas {cmp.volatility:g}%{extra}"
+            )
     return "\n".join(lines) or "(tidak ada)"
+
+
+def news_passages(items: list[NewsCtx]) -> list[Passage]:
+    """Articles as passages (page 0 marks 'no page'), so numbering, citations and the guardrail treat them like documents."""
+    return [
+        Passage(
+            chunk_id=-i,
+            title=n.title,
+            source_type="news",
+            page=0,
+            section=n.source or None,
+            content=f"{n.source} {n.publishedAt[:10]}\n{n.summary or n.title}".strip(),
+            key=n.url or n.title,
+            ticker=None,
+        )
+        for i, n in enumerate(items, 1)
+    ]
 
 
 def passages_text(passages: list[Passage]) -> str:
     if not passages:
         return "(tidak ada kutipan relevan)"
     return "\n\n".join(
-        f"[{i}] {p.title}, hal. {p.page}\n{p.content[:1800]}" for i, p in enumerate(passages, 1)
+        f"[{i}] {'Berita: ' if p.source_type == 'news' else ''}{p.title}"
+        + (f", hal. {p.page}" if p.page else "")
+        + f"\n{p.content[:1800]}"
+        for i, p in enumerate(passages, 1)
     )
-
-
-def build(req: ChatRequest, passages: list[Passage], fix: str = "") -> list[dict[str, str]]:
-    system = (
-        SYSTEM[req.lang]
-        + f"\n\nFAKTA USER:\n{facts_text(req.userContext)}\n\nKUTIPAN SUMBER:\n{passages_text(passages)}"
-    )
-    msgs = [{"role": "system", "content": system}]
-    msgs += [{"role": t.role, "content": t.content} for t in req.history[-6:]]
-    msgs.append(
-        {
-            "role": "user",
-            "content": req.message + (f"\n\n(Perbaiki jawabanmu: {fix})" if fix else ""),
-        }
-    )
-    return msgs

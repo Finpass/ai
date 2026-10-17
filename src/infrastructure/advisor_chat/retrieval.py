@@ -1,26 +1,14 @@
 import re
-from dataclasses import dataclass
 
 import psycopg
 
 from src.core.config import settings
-from src.features.rag import embedder, intent
+from src.domain.advisor_chat import intent
+from src.domain.advisor_chat.documents import Passage
+from src.infrastructure.advisor_chat import embedder
 
 _WORD = re.compile(r"[a-z0-9]{3,}")
 RRF_K = 60
-
-
-@dataclass
-class Passage:
-    chunk_id: int
-    title: str
-    source_type: str
-    page: int
-    section: str | None
-    content: str
-    key: str
-    ticker: str | None
-    score: float = 0.0
 
 
 def rrf(rankings: list[list[int]], k: int = RRF_K) -> list[int]:

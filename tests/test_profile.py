@@ -7,10 +7,10 @@ from fastapi.testclient import TestClient
 
 from src.app import app
 from src.core.config import DEV_INTERNAL_KEY, settings
-from src.features.profile import facts as facts_mod
-from src.features.profile import guardrail
-from src.features.profile.router import get_llm
-from src.features.profile.schemas import ExplainRequest
+from src.domain.user_profiling import facts as facts_mod
+from src.domain.user_profiling import guardrail
+from src.domain.user_profiling.schemas import ExplainRequest
+from src.features.user_profiling.router import get_llm
 from src.infrastructure.openrouter import OpenRouterClient
 
 KEY = {"X-Internal-Api-Key": DEV_INTERNAL_KEY}

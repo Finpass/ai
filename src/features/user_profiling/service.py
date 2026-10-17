@@ -3,31 +3,16 @@ import logging
 import re
 
 from src.core.config import settings
-from src.features.profile import facts as facts_mod
-from src.features.profile import guardrail, template
-from src.features.profile.schemas import ExplainRequest, ExplainResponse
+from src.domain.user_profiling import facts as facts_mod
+from src.domain.user_profiling import guardrail, template
+from src.domain.user_profiling.schemas import ExplainRequest, ExplainResponse
 from src.infrastructure.openrouter import LLMError, OpenRouterClient
+from src.infrastructure.prompt.loader import load
 
 logger = logging.getLogger("profile")
 
 _KEYS = ("summary", "risk", "ladder", "health", "nextStep")
 _MAX_LEN = 1200
-
-_SYSTEM = (
-    "You write a short financial-education explanation for a retail user in Indonesia. "
-    "You receive facts computed by a rule engine. Rules: use ONLY numbers present in the facts "
-    "(you may format them, e.g. 1,5 or 1.5 or Rp 37.500.000) and invent none; never recommend, "
-    "name or rank any product, stock, fund, coin or ticker; never use the words buy, sell, beli "
-    "or jual; this is education, not investment advice. Cover: summary; risk profile (say it is "
-    "provisional when riskProfileIsProvisional is true); what the Financial Ladder level means; "
-    "financial health (strongest and weakest dimension, category); ONE concrete next step based "
-    "on the ladder level (level 1: emergency fund gap emergencyFundGapIDR; level 2: high-interest "
-    "debt; level 3: start basic diversified investing; level 4: review allocation; level 5: "
-    "estate and tax planning). Tone: warm, plain, no jargon, no emoji. Address the user by "
-    "firstName if given. Reply with a single JSON object with exactly these string keys: "
-    + ", ".join(_KEYS)
-    + ". Do not include a disclaimer."
-)
 
 
 def _parse(content: str) -> dict[str, str] | None:
@@ -50,7 +35,7 @@ def _parse(content: str) -> dict[str, str] | None:
 async def _generate(f: facts_mod.Facts, llm: OpenRouterClient) -> dict[str, str] | None:
     lang = "Indonesian (Bahasa Indonesia)" if f.locale == "id" else "English"
     messages = [
-        {"role": "system", "content": _SYSTEM},
+        {"role": "system", "content": load("user_profiling_system").format(keys=", ".join(_KEYS))},
         {
             "role": "user",
             "content": f"Write in {lang}. Facts:\n"

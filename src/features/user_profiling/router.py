@@ -5,8 +5,8 @@ from fastapi import APIRouter, Depends
 from src.core.config import settings
 from src.core.envelope import Success
 from src.core.security import require_internal_key
-from src.features.profile import service
-from src.features.profile.schemas import ExplainRequest, ExplainResponse
+from src.domain.user_profiling.schemas import ExplainRequest, ExplainResponse
+from src.features.user_profiling import service
 from src.infrastructure.openrouter import OpenRouterClient
 
 router = APIRouter(prefix="/ml/profile", tags=["profile"], dependencies=[require_internal_key])

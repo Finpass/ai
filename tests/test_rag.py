@@ -2,11 +2,13 @@ import asyncio
 
 import pytest
 
-from src.features.rag import guardrail, intent, meta, retrieval, service
-from src.features.rag.chunking import chunk_pages
-from src.features.rag.extract import Page
-from src.features.rag.retrieval import Passage
-from src.features.rag.schemas import ChatRequest, HoldingCtx, ProfileCtx, UserContext
+from src.domain.advisor_chat import guardrail, intent, meta
+from src.domain.advisor_chat.chunking import chunk_pages
+from src.domain.advisor_chat.schemas import ChatRequest, HoldingCtx, ProfileCtx, UserContext
+from src.features.advisor_chat import service
+from src.infrastructure.advisor_chat import retrieval
+from src.infrastructure.advisor_chat.extract import Page
+from src.infrastructure.advisor_chat.retrieval import Passage
 from src.infrastructure.openrouter import LLMError
 
 
@@ -115,6 +117,8 @@ class FakeLLM:
         self.replies, self.calls = list(replies), 0
 
     async def complete(self, messages, **kw):
+        if kw.get("max_tokens") == 40:  # a turn title, not an answer
+            return "Judul langkah uji"
         self.calls += 1
         r = self.replies.pop(0)
         if isinstance(r, Exception):
@@ -184,7 +188,7 @@ def test_portfolio_question_answers_from_facts_without_passages(monkeypatch):
 
 
 def test_extract_strips_nul_bytes(monkeypatch):
-    from src.features.rag import extract
+    from src.infrastructure.advisor_chat import extract
 
     class P:
         def extract_text(self):
@@ -211,7 +215,7 @@ def test_chat_attaches_turn_trail_and_buffer_serves_it(monkeypatch):
     req = ChatRequest(message="Apa kewajiban bank soal teknologi informasi?", runId="run-1")
     out = asyncio.run(service.chat(req, FakeLLM(["Bank wajib menerapkan manajemen risiko [1]."])))
     titles = [t.title for t in out.turns]
-    assert titles[0].startswith("Memahami") and titles[-1] == "Jawaban siap"
+    assert titles[0] == "Judul langkah uji" and len(titles) >= 4
     assert [t.sequence for t in out.turns] == list(range(1, len(titles) + 1))
     assert out.turns[-1].type == "result" and out.turns[-1].status == "done"
     assert [e.title for e in turn_buffer.read("run-1")] == titles
@@ -243,3 +247,108 @@ def test_gap_admission_is_a_valid_uncited_answer(monkeypatch):
     assert out.source == "llm" and not out.grounded and not out.citations and llm.calls == 1
     assert guardrail.admits_gap("I could not find this in the sources.")
     assert not guardrail.admits_gap("Bank wajib menerapkan manajemen risiko [1].")
+
+
+def test_comparison_facts_reach_the_prompt_and_answer_without_passages(monkeypatch):
+    from src.domain.advisor_chat import facts as prompt
+    from src.domain.advisor_chat.schemas import CompareCtx
+
+    ctx = UserContext(
+        profile=ProfileCtx(riskProfile="Moderate", ladderLevel=3),
+        comparison=[
+            CompareCtx(
+                symbol="BBCA.JK",
+                cls="equity_large_cap",
+                score=42.2,
+                rank=2,
+                return1y=-28.4,
+                volatility=21.3,
+            ),
+            CompareCtx(symbol="GC=F", cls="gold", eligible=False, gate="gate_sharia", score=47.4),
+        ],
+    )
+    facts = prompt.facts_text(ctx)
+    assert "BBCA.JK" in facts and "skor 42.2" in facts and "tidak lolos gate_sharia" in facts
+    _patch(monkeypatch, [], kind="edukasi")
+    llm = FakeLLM(["BBCA.JK punya skor 42.2 dan peringkat 2 untuk profil Anda."])
+    out = asyncio.run(service.chat(_req("Bandingkan BBCA dan emas", ctx), llm))
+    assert out.source == "llm" and llm.calls == 1
+
+
+def _news(n=1):
+    from src.domain.advisor_chat.schemas import NewsCtx
+
+    return [
+        NewsCtx(
+            title=f"BBCA cetak laba {i}",
+            source="CNBC",
+            url=f"https://news.example/{i}",
+            publishedAt="2026-10-17T08:00:00Z",
+            summary="Laba bersih naik 10,5% pada kuartal ketiga.",
+        )
+        for i in range(1, n + 1)
+    ]
+
+
+def test_thin_documents_pull_in_news_and_cite_it_with_url(monkeypatch):
+    _patch(monkeypatch, [])
+    llm = FakeLLM(["Laba bersih naik 10,5% menurut berita [1]."])
+    out = asyncio.run(service.chat(_req("kabar BBCA?", UserContext(news=_news())), llm))
+    assert out.source == "llm" and out.grounded and llm.calls == 1
+    assert out.citations[0].sourceType == "news" and out.citations[0].page is None
+    assert out.citations[0].url == "https://news.example/1"
+    assert out.trace.chunkIds == []
+
+
+def test_enough_documents_leave_news_out(monkeypatch):
+    _patch(monkeypatch, [_passage(), _passage(), _passage()])
+    llm = FakeLLM(["Bank wajib menerapkan manajemen risiko [1]."])
+    out = asyncio.run(service.chat(_req("x", UserContext(news=_news())), llm))
+    assert all(c.sourceType != "news" for c in out.citations)
+
+
+def test_every_llm_answer_ends_with_the_disclaimer(monkeypatch):
+    _patch(monkeypatch, [_passage()])
+    out = asyncio.run(
+        service.chat(_req(), FakeLLM(["Bank wajib menerapkan manajemen risiko [1]."]))
+    )
+    assert "bukan nasihat keuangan" in out.answer and out.answer.index("[1]") < out.answer.index(
+        "riset sendiri"
+    )
+
+
+def test_full_personal_context_reaches_the_facts():
+    from src.domain.advisor_chat import facts
+    from src.domain.advisor_chat.schemas import ProfileCtx
+
+    ctx = UserContext(
+        profile=ProfileCtx(
+            riskProfile="Moderate",
+            ladderLevel=3,
+            incomeIDR=12_500_000,
+            savingsIDR=40_000_000,
+            dependents=2,
+            emergencyMonths=3,
+            emergencyTargetMonths=6,
+        )
+    )
+    text = facts.facts_text(ctx)
+    assert "pendapatan per bulan Rp 12.500.000" in text and "tanggungan 2 orang" in text
+    assert "Dana darurat: 3 bulan pengeluaran dari target 6 bulan" in text
+
+
+def test_narrator_titles_follow_call_order_and_fall_back_without_model():
+    from src.infrastructure.observability.narrator import Narrator
+    from src.infrastructure.observability.turns import turn_buffer
+
+    async def go(llm):
+        nar = Narrator("run-nar", "id", "q", llm)
+        nar.say("a", "f", "satu")
+        nar.say("b", "f", "dua", type="result", status="done")
+        await nar.drain()
+
+    asyncio.run(go(None))
+    evs = turn_buffer.read("run-nar")
+    assert [e.title for e in evs] == ["satu", "dua"] and evs[-1].status == "done"
+    asyncio.run(go(FakeLLM([])))
+    assert [e.title for e in turn_buffer.read("run-nar")][2:] == ["Judul langkah uji"] * 2

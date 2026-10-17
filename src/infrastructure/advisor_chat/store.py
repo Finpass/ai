@@ -4,8 +4,8 @@ import psycopg
 from pgvector.psycopg import register_vector
 
 from src.core.config import settings
-from src.features.rag.chunking import Chunk
-from src.features.rag.meta import DocMeta
+from src.domain.advisor_chat.chunking import Chunk
+from src.domain.advisor_chat.meta import DocMeta
 
 
 def connect() -> psycopg.Connection:

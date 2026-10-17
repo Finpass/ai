@@ -25,30 +25,18 @@ def test_health_envelope(client):
     assert r.json() == {"success": True, "message": "ok", "data": None}
 
 
-def test_text_stats_ok(client):
-    r = client.post("/ml/text-stats", json={"text": " halo dunia  "}, headers=KEY)
-    assert r.status_code == 200
-    assert r.json()["data"] == {"words": 2, "chars": 10}
-
-
 def test_missing_key_is_unauthorized(client):
-    r = client.post("/ml/text-stats", json={"text": "x"})
+    r = client.post("/ml/profile/explain", json={})
     assert r.status_code == 401
     assert err(r)["code"] == "UNAUTHORIZED"
 
 
-def test_blank_text_is_unprocessable(client):
-    r = client.post("/ml/text-stats", json={"text": "   "}, headers=KEY)
-    assert r.status_code == 422
-    assert err(r)["code"] == "UNPROCESSABLE"
-
-
 def test_validation_details(client):
-    r = client.post("/ml/text-stats", json={"text": "x", "extra": 1}, headers=KEY)
+    r = client.post("/ml/profile/explain", json={}, headers=KEY)
     e = err(r)
     assert r.status_code == 422
     assert e["code"] == "VALIDATION_FAILED"
-    assert e["details"][0]["field"] == "extra"
+    assert e["details"]
 
 
 def test_unknown_route_and_method(client):

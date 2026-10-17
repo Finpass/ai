@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 from llama_index.core.node_parser import SentenceSplitter
 
-from src.features.rag.extract import Page
+from src.domain.advisor_chat.documents import Page
 
 # BGE-M3 sees about 1.4 tokens per Indonesian word; sizes below are in words.
 SIZES = {

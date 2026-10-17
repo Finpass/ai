@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
-from src.features.profile.schemas import ExplainRequest
+from src.domain.user_profiling.schemas import ExplainRequest
 
 DIMENSIONS = ("Security", "Safety", "Growth", "Wisdom", "Freedom")
 # Fixed numbers any text may mention: score scale and ladder size.

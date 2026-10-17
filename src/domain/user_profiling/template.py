@@ -1,4 +1,4 @@
-from src.features.profile.facts import Facts
+from src.domain.user_profiling.facts import Facts
 
 DISCLAIMER = {
     "id": "Ini panduan edukasi, bukan nasihat investasi.",

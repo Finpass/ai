@@ -42,7 +42,6 @@ class OpenRouterClient:
             "temperature": 0.2,
             "max_tokens": max_tokens,
             "provider": provider,
-            # reasoning models otherwise spend max_tokens thinking and return empty content
             "reasoning": {"enabled": False},
         }
         if json_mode:
@@ -56,7 +55,6 @@ class OpenRouterClient:
             data: Any = resp.json()
             content = data["choices"][0]["message"]["content"]
         except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
-            # class name only: never log bodies, headers or prompts
             logger.warning("openrouter call failed: %s", type(exc).__name__)
             raise LLMError(type(exc).__name__) from exc
         if not isinstance(content, str):

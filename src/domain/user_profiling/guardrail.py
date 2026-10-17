@@ -1,7 +1,6 @@
 import re
 from decimal import Decimal, InvalidOperation
 
-# Recommendation wording (en/id), crypto names, and 4-letter uppercase tickers.
 _TICKER = re.compile(r"\b[A-Z]{4}\b")
 _WORDS = re.compile(
     r"\b(buy|buying|bought|sell|selling|sold|beli|membeli|dibeli|jual|menjual|dijual|"
@@ -13,7 +12,6 @@ _GROUPED = re.compile(r"^\d{1,3}(?:[.,]\d{3})+$")
 
 
 def _values(token: str) -> set[Decimal]:
-    """Possible numeric readings of a token (1.500 may be 1500 or 1.5)."""
     out: set[Decimal] = set()
     try:
         if _GROUPED.match(token):
