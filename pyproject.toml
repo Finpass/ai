@@ -58,8 +58,12 @@ select = ["E", "F", "I", "B", "UP", "SIM", "ASYNC", "S"]
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "E501"]
 # prompt/regex literals read better unwrapped; the SQL interpolates only module constants
-"src/features/rag/**" = ["E501", "S608"]
+"src/features/advisor_chat/**" = ["E501"]
+"src/domain/advisor_chat/**" = ["E501"]
+"src/infrastructure/advisor_chat/**" = ["E501", "S608"]
 
 [tool.mypy]
 strict = true
 plugins = ["pydantic.mypy"]
+namespace_packages = true
+explicit_package_bases = true
