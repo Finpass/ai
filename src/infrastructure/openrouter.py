@@ -16,7 +16,15 @@ class OpenRouterClient:
     def __init__(self, transport: httpx.AsyncBaseTransport | None = None) -> None:
         self._transport = transport
 
-    async def complete(self, messages: list[dict[str, str]]) -> str:
+    async def complete(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        json_mode: bool = True,
+        max_tokens: int = 900,
+        timeout_seconds: float | None = None,
+        model: str | None = None,
+    ) -> str:
         headers = {
             "Authorization": f"Bearer {settings.openrouter_api_key}",
             "X-Title": "Finpass",
@@ -29,20 +37,20 @@ class OpenRouterClient:
         if order := [p.strip() for p in settings.openrouter_provider_order.split(",") if p.strip()]:
             provider["order"] = order
         body = {
-            "model": settings.openrouter_model,
+            "model": model or settings.openrouter_model,
             "messages": messages,
             "temperature": 0.2,
-            "max_tokens": 900,
-            "response_format": {"type": "json_object"},
+            "max_tokens": max_tokens,
             "provider": provider,
             # reasoning models otherwise spend max_tokens thinking and return empty content
             "reasoning": {"enabled": False},
         }
+        if json_mode:
+            body["response_format"] = {"type": "json_object"}
         url = settings.openrouter_base_url.rstrip("/") + "/chat/completions"
+        limit = timeout_seconds or settings.openrouter_timeout_seconds
         try:
-            async with httpx.AsyncClient(
-                transport=self._transport, timeout=settings.openrouter_timeout_seconds
-            ) as http:
+            async with httpx.AsyncClient(transport=self._transport, timeout=limit) as http:
                 resp = await http.post(url, json=body, headers=headers)
             resp.raise_for_status()
             data: Any = resp.json()
