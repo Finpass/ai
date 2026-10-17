@@ -1,6 +1,6 @@
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class Turn(BaseModel):
@@ -8,7 +8,16 @@ class Turn(BaseModel):
     content: str = Field(max_length=4000)
 
 
-class ProfileCtx(BaseModel):
+class _NullAsMissing(BaseModel):
+    """Go encodes an empty slice it never initialised as null; treat null as 'not sent' so defaults apply."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_nulls(cls, data: Any) -> Any:
+        return {k: v for k, v in data.items() if v is not None} if isinstance(data, dict) else data
+
+
+class ProfileCtx(_NullAsMissing):
     riskProfile: str
     ladderLevel: int
     sharia: str = "no"
@@ -80,10 +89,16 @@ class NewsCtx(BaseModel):
     source: str = ""
     url: str = ""
     publishedAt: str = ""
-    summary: str = Field(default="", max_length=1200)
+    summary: str = ""
+
+    @field_validator("title", "summary", mode="after")
+    @classmethod
+    def _trim(cls, v: str) -> str:
+        """Feed text has no length bound; cut it here so one long article never rejects the whole question."""
+        return v[:1200]
 
 
-class UserContext(BaseModel):
+class UserContext(_NullAsMissing):
     profile: ProfileCtx | None = None
     holdings: list[HoldingCtx] = []
     recommended: list[RecClass] = []

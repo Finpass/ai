@@ -352,3 +352,24 @@ def test_narrator_titles_follow_call_order_and_fall_back_without_model():
     assert [e.title for e in evs] == ["satu", "dua"] and evs[-1].status == "done"
     asyncio.run(go(FakeLLM([])))
     assert [e.title for e in turn_buffer.read("run-nar")][2:] == ["Judul langkah uji"] * 2
+
+
+def test_overlong_news_text_is_trimmed_not_rejected():
+    from src.domain.advisor_chat.schemas import NewsCtx
+
+    n = NewsCtx(title="t", summary="a" * 5000)
+    assert len(n.summary) == 1200
+    assert ChatRequest(message="x", userContext=UserContext(news=[n])).userContext.news
+
+
+def test_null_lists_from_the_backend_count_as_empty():
+    req = ChatRequest(
+        message="x",
+        userContext={
+            "comparison": None,
+            "news": None,
+            "profile": {"riskProfile": "Moderate", "ladderLevel": 1, "heldKinds": None},
+        },
+    )
+    assert req.userContext.comparison == [] and req.userContext.news == []
+    assert req.userContext.profile.heldKinds == []
