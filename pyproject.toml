@@ -10,12 +10,32 @@ dependencies = [
     "httpx2>=2.13.1",
 ]
 
+[project.optional-dependencies]
+rag = [
+    "boto3>=1.43.114",
+    "ipykernel>=7.4.0",
+    "llama-index-core>=0.14.25",
+    "pdfplumber>=0.11.10",
+    "pgvector>=0.5.1",
+    "psycopg[binary,pool]>=3.3.6",
+    "sentence-transformers>=6.1.0",
+]
+
 [dependency-groups]
 dev = [
     "pytest",
     "ruff",
     "mypy",
 ]
+
+# CPU-only torch on Linux keeps the container image small (the default wheel bundles CUDA)
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
 
 [build-system]
 requires = ["hatchling"]
@@ -36,7 +56,9 @@ target-version = "py313"
 select = ["E", "F", "I", "B", "UP", "SIM", "ASYNC", "S"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101"]
+"tests/**" = ["S101", "E501"]
+# prompt/regex literals read better unwrapped; the SQL interpolates only module constants
+"src/features/rag/**" = ["E501", "S608"]
 
 [tool.mypy]
 strict = true
