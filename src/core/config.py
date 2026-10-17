@@ -20,6 +20,21 @@ class Settings(BaseSettings):
     openrouter_provider_order: str = ""
     openrouter_allow_fallbacks: bool = True
 
+    # RAG (optional dependency group `rag`)
+    rag_enabled: bool = True
+    rag_model: str = ""  # chat model for the advisory bot; empty means openrouter_model
+    database_url: str = ""
+    r2_endpoint: str = ""
+    r2_bucket: str = "setagama-core"
+    r2_access_key_id: str = ""
+    r2_secret_access_key: str = ""
+    embed_model: str = "BAAI/bge-m3"
+    rerank_model: str = "BAAI/bge-reranker-v2-m3"
+    rag_top_k: int = 50
+    rag_top_n: int = 6
+    rag_min_score: float = 0.15
+    rag_chat_timeout_seconds: float = 45
+
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"
