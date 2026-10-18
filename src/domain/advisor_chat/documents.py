@@ -10,12 +10,16 @@ class Page:
 
 @dataclass
 class Passage:
-    chunk_id: int
+    id: int | str
     title: str
     source_type: str
-    page: int
-    section: str | None
+    page_start: int
+    section: str
     content: str
-    key: str
-    ticker: str | None
+    r2_key: str
+    ticker: str | None = None
     score: float = 0.0
+    tier: int = 1
+    nomor: str = ""
+    publisher: str = "OJK"
+    tanggal: int = 0
