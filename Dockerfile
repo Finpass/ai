@@ -19,4 +19,4 @@ USER app
 EXPOSE 8001
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD curl -fsS "http://127.0.0.1:${PORT:-8001}/health" || exit 1
-CMD ["sh", "-c", "uvicorn src.app:app --host 0.0.0.0 --port ${PORT:-8001}"]
+CMD ["sh", "-c", "uvicorn src.app:app --host :: --port ${PORT:-8001}"]
