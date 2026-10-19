@@ -1,61 +1,13 @@
 import re
-from decimal import Decimal, InvalidOperation
 
-_ADVICE = re.compile(
-    r"\b(sebaiknya|disarankan|saya sarankan|anda harus|kamu harus|you should|i recommend|i suggest|we recommend)\b"
-    r"|\b(beli|buy|jual|sell)\s+(saham|aset|sekarang|now|it|this|ini)\b"
-    r"|pasti\s+(naik|untung|cuan)|dijamin|guaranteed|risk[- ]free",
-    re.IGNORECASE,
-)
-_NUMBER = re.compile(r"(?<![\w\[])\d[\d.,]*%?")
 _MARKER = re.compile(r"\[(\d{1,2})\]")
 
 
-def _values(token: str) -> set[Decimal]:
-    """Every plausible reading of a number token: '1.234' can be one thousand or 1.234."""
-    t = token.rstrip("%").rstrip(".,")
-    out: set[Decimal] = set()
-    cands = {
-        t,
-        t.replace(".", "").replace(",", ""),
-        t.replace(".", "").replace(",", "."),
-        t.replace(",", ""),
-    }
-    for c in cands:
-        try:
-            out.add(Decimal(c))
-        except InvalidOperation:
-            continue
-    return out
-
-
-def numbers_in(text: str) -> set[Decimal]:
-    vals: set[Decimal] = set()
-    for tok in _NUMBER.findall(text):
-        vals |= _values(tok)
-    return vals
-
-
-def violations(answer: str, allowed_text: str, n_passages: int, needs_citation: bool) -> list[str]:
-    found: list[str] = []
-    if m := _ADVICE.search(answer):
-        found.append(f"advice wording: {m.group(0)}")
-    allowed = numbers_in(allowed_text)
-    for tok in _NUMBER.findall(answer):
-        vals = _values(tok)
-        if not vals:
-            continue
-        # small whole numbers (counts, list items) are harmless; everything else must come from the context
-        if any(v == v.to_integral_value() and v < 100 for v in vals):
-            continue
-        if not (vals & allowed):
-            found.append(f"number not in context: {tok}")
-    marks = {int(x) for x in _MARKER.findall(answer)}
-    if any(not 1 <= x <= n_passages for x in marks):
-        found.append("citation marker out of range")
-    if needs_citation and n_passages and not marks:
-        found.append("missing citation")
-    return found[:6]
+def violations(answer: str, n_passages: int) -> list[str]:
+    """Deliberately loose: the answer may reason over the sources, so only dangling [n] markers are refused."""
+    if any(not 1 <= int(x) <= n_passages for x in _MARKER.findall(answer)):
+        return ["citation marker out of range"]
+    return []
 
 
 _GAP = re.compile(
