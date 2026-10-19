@@ -46,17 +46,6 @@ def test_chunking_keeps_pages_and_skips_empty():
     assert chunk_pages([Page(1, "", False)], "ojk_edukasi", "T") == []
 
 
-def test_rrf_prefers_ids_present_in_both_lists():
-    assert retrieval.rrf([[1, 2, 3], [3, 1, 4]])[:2] == [1, 3]
-    assert retrieval.rrf([[], []]) == []
-
-
-def test_or_query_sanitises():
-    assert (
-        retrieval.or_query("Apa itu 'POJK' & risiko; DROP--") == "apa | itu | pojk | risiko | drop"
-    )
-
-
 @pytest.mark.parametrize(
     ("msg", "tickers", "want"),
     [
@@ -79,22 +68,11 @@ def test_ticker_detection_needs_known_uppercase_symbol():
     assert intent.held_tickers(["BBCA.JK", "AAPL", "tlkm.jk"], known) == ["BBCA", "TLKM"]
 
 
-def test_guardrail_rules():
-    ctx = "Laba bersih Rp 1.250 miliar [1] hal. 12; risiko moderat 3"
-    ok = "Laba bersih Rp 1.250 miliar [1]."
-    assert guardrail.violations(ok, ctx, 1, True) == []
-    assert any(
-        "not in context" in v
-        for v in guardrail.violations("Laba Rp 9.999 miliar [1].", ctx, 1, True)
-    )
-    assert any(
-        "advice" in v for v in guardrail.violations("Sebaiknya beli saham ini [1].", ctx, 1, True)
-    )
-    assert any("out of range" in v for v in guardrail.violations("Lihat [3].", ctx, 1, True))
-    assert any(
-        "missing citation" in v for v in guardrail.violations("Tanpa penanda.", ctx, 2, True)
-    )
-    assert guardrail.violations("Anda punya 3 aset.", ctx, 0, False) == []
+def test_guardrail_only_refuses_dangling_markers():
+    # numbers computed by the model, advice-like wording and missing markers are all allowed
+    assert guardrail.violations("Laba naik jadi Rp 9.999 miliar. Sebaiknya pantau terus.", 1) == []
+    assert guardrail.violations("Lihat [1].", 1) == []
+    assert any("out of range" in v for v in guardrail.violations("Lihat [3].", 1))
     assert guardrail.used_markers("a [2] b [1] c [9] [2]", 3) == [1, 2]
 
 
@@ -154,7 +132,7 @@ def test_good_answer_cites_used_passages_only(monkeypatch):
 
 def test_retry_then_fallback_on_bad_answers(monkeypatch):
     _patch(monkeypatch, [_passage()])
-    llm = FakeLLM(["Sebaiknya beli sekarang [1].", "Pasti untung 500 persen [1]."])
+    llm = FakeLLM(["Lihat [7].", "Lihat juga [8]."])
     out = asyncio.run(service.chat(_req(), llm))
     assert (
         out.source == "fallback"
@@ -166,7 +144,7 @@ def test_retry_then_fallback_on_bad_answers(monkeypatch):
 
 def test_retry_recovers(monkeypatch):
     _patch(monkeypatch, [_passage()])
-    llm = FakeLLM(["Tanpa penanda.", "Bank wajib menerapkan manajemen risiko [1]."])
+    llm = FakeLLM(["Lihat [7].", "Bank wajib menerapkan manajemen risiko [1]."])
     assert asyncio.run(service.chat(_req(), llm)).source == "llm"
 
 
@@ -373,3 +351,16 @@ def test_null_lists_from_the_backend_count_as_empty():
     )
     assert req.userContext.comparison == [] and req.userContext.news == []
     assert req.userContext.profile.heldKinds == []
+
+
+def test_disclaimer_appears_once_even_if_the_model_copies_it():
+    note = service.load("advisor_chat_disclaimer_en")
+    out = service._with_note(f"Jawaban.\n\n{note}", "en")
+    assert out.count(note) == 1 and out.startswith("Jawaban.")
+    assert note not in service._strip_note(f"Jawaban.\n\n{note}")
+
+
+def test_years_and_query_expansion():
+    assert retrieval.years_in("laba ANTM 2024, 2025 dan 2026") == [2024, 2025, 2026]
+    assert "laporan laba rugi" in retrieval.expand("bagaimana laba ANTM")
+    assert retrieval.expand("apa itu reksa dana") == "apa itu reksa dana"

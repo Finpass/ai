@@ -6,7 +6,7 @@ from src.core.config import settings
 from src.domain.advisor_chat import facts, guardrail
 from src.domain.advisor_chat.documents import Passage
 from src.domain.advisor_chat.schemas import ChatRequest, ChatResponse, Citation, Trace, Turn_
-from src.infrastructure.advisor_chat import retrieval, store
+from src.infrastructure.advisor_chat import retrieval
 from src.infrastructure.observability.narrator import Narrator
 from src.infrastructure.observability.turns import dump, turn_buffer
 from src.infrastructure.openrouter import LLMError, OpenRouterClient
@@ -14,7 +14,6 @@ from src.infrastructure.prompt.loader import load
 
 logger = logging.getLogger("rag.service")
 
-# fewer matching documents than this and the news the backend attached may join the sources
 NEWS_WHEN_DOCS_BELOW = 3
 
 NOT_FOUND = {
@@ -34,7 +33,7 @@ def _messages(req: ChatRequest, passages: list[Passage], fix: str = "") -> list[
         + f"\n\nKUTIPAN SUMBER:\n{facts.passages_text(passages)}"
     )
     msgs = [{"role": "system", "content": system}]
-    msgs += [{"role": t.role, "content": t.content} for t in req.history[-6:]]
+    msgs += [{"role": t.role, "content": _strip_note(t.content)} for t in req.history[-6:]]
     suffix = f"\n\n(Perbaiki jawabanmu: {fix})" if fix else ""
     msgs.append({"role": "user", "content": req.message + suffix})
     return msgs
@@ -50,13 +49,9 @@ def _query(req: ChatRequest) -> str:
 
 
 def _search(req: ChatRequest) -> tuple[list[Passage], str, list[str]]:
-    conn = store.connect()
-    try:
-        return retrieval.search(
-            conn, req.message, _query(req), req.lang, [h.symbol for h in req.userContext.holdings]
-        )
-    finally:
-        conn.close()
+    return retrieval.search(
+        req.message, _query(req), req.lang, [h.symbol for h in req.userContext.holdings]
+    )
 
 
 def _citations(passages: list[Passage], used: list[int]) -> list[Citation]:
@@ -64,10 +59,10 @@ def _citations(passages: list[Passage], used: list[int]) -> list[Citation]:
         Citation(
             n=n,
             title=passages[n - 1].title,
-            page=passages[n - 1].page or None,
+            page=passages[n - 1].page_start or None,
             sourceType=passages[n - 1].source_type,
-            key=passages[n - 1].key,
-            url=passages[n - 1].key if passages[n - 1].key.startswith("http") else None,
+            key=passages[n - 1].r2_key,
+            url=passages[n - 1].r2_key if passages[n - 1].r2_key.startswith("http") else None,
         )
         for n in used
     ]
@@ -84,14 +79,21 @@ def _snippet(content: str, limit: int = 240) -> str:
 def _excerpts(passages: list[Passage], lang: str) -> str:
     lines = [FALLBACK_HEAD[lang], ""]
     for i, p in enumerate(passages[:3], 1):
-        page = f", hal. {p.page}" if p.page else ""
+        page = f", hal. {p.page_start}" if p.page_start else ""
         lines.append(f"- {p.title}{page}: {_snippet(p.content)} [{i}]")
     return _with_note("\n".join(lines), lang)
 
 
+def _strip_note(text: str) -> str:
+    """Drops the fixed disclaimer: stored turns carry it, and a model that sees it in history copies it."""
+    for lang in ("id", "en"):
+        text = text.replace(load(f"advisor_chat_disclaimer_{lang}"), "")
+    return text.strip()
+
+
 def _with_note(answer: str, lang: str) -> str:
     """Every answer ends with the same fixed disclaimer, written by us and not by the model."""
-    return f"{answer}\n\n{load(f'advisor_chat_disclaimer_{lang}')}"
+    return f"{_strip_note(answer)}\n\n{load(f'advisor_chat_disclaimer_{lang}')}"
 
 
 # plain fallbacks: used when the model cannot write a title, or is not configured at all
@@ -184,7 +186,7 @@ async def _chat(req: ChatRequest, llm: OpenRouterClient | None, nar: Narrator) -
     trace = Trace(
         intent=intent_name,
         tickers=tickers,
-        chunkIds=[p.chunk_id for p in docs],
+        chunkIds=[str(p.id) for p in docs],
         topScore=round(docs[0].score, 3) if docs else 0.0,
     )
     has_facts = bool(
@@ -218,13 +220,6 @@ async def _chat(req: ChatRequest, llm: OpenRouterClient | None, nar: Narrator) -
             ),
         )
 
-    allowed = (
-        facts.facts_text(req.userContext)
-        + "\n"
-        + facts.passages_text(passages)
-        + "\n"
-        + req.message
-    )
     fix = ""
     for attempt in range(2):
         if attempt == 0:
@@ -237,7 +232,7 @@ async def _chat(req: ChatRequest, llm: OpenRouterClient | None, nar: Narrator) -
                 await llm.complete(
                     _messages(req, passages, fix),
                     json_mode=False,
-                    max_tokens=700,
+                    max_tokens=1200,
                     timeout_seconds=settings.rag_chat_timeout_seconds,
                     model=settings.rag_model or None,
                 )
@@ -245,9 +240,7 @@ async def _chat(req: ChatRequest, llm: OpenRouterClient | None, nar: Narrator) -
         except LLMError:
             break
         gap = guardrail.admits_gap(answer) and not guardrail.used_markers(answer, len(passages))
-        bad = guardrail.violations(
-            answer, allowed, len(passages), needs_citation=bool(passages) and not gap
-        )
+        bad = guardrail.violations(answer, len(passages))
         if not bad:
             used_n = guardrail.used_markers(answer, len(passages))
             answer = _with_note(answer, req.lang)

@@ -18,8 +18,10 @@ logging.basicConfig(
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    if settings.rag_enabled and settings.database_url:
-        from src.infrastructure.advisor_chat import embedder
+    if settings.rag_enabled:
+        from src.infrastructure.advisor_chat import embedder, loader
+
+        await asyncio.to_thread(loader.ensure_corpus)
 
         asyncio.get_running_loop().run_in_executor(None, embedder.warmup)
     yield

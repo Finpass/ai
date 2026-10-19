@@ -76,12 +76,14 @@ def facts_text(ctx: UserContext) -> str:
                 f"lolos gate, peringkat {cmp.rank}" if cmp.eligible else f"tidak lolos {cmp.gate}"
             )
             extra = "".join(
-                f", {k} {v:g}"
-                for k, v in (
-                    ("sharpe", cmp.sharpe),
-                    ("dividen", cmp.divYield),
-                    ("PER", cmp.per),
-                    ("PBV", cmp.pbv),
+                f", {k} {v:g}{unit}"
+                for k, v, unit in (
+                    ("sharpe", cmp.sharpe, ""),
+                    ("dividend yield", cmp.divYield, "%"),
+                    ("PER", cmp.per, "x"),
+                    ("PBV", cmp.pbv, "x"),
+                    ("ROE", cmp.roe, "%"),
+                    ("beta", cmp.beta, ""),
                 )
                 if v is not None
             )
@@ -95,13 +97,13 @@ def news_passages(items: list[NewsCtx]) -> list[Passage]:
     """Articles as passages (page 0 marks 'no page'), so numbering, citations and the guardrail treat them like documents."""
     return [
         Passage(
-            chunk_id=-i,
+            id=-i,
             title=n.title,
             source_type="news",
-            page=0,
-            section=n.source or None,
+            page_start=0,
+            section=n.source or "",
             content=f"{n.source} {n.publishedAt[:10]}\n{n.summary or n.title}".strip(),
-            key=n.url or n.title,
+            r2_key=n.url or n.title,
             ticker=None,
         )
         for i, n in enumerate(items, 1)
@@ -113,7 +115,7 @@ def passages_text(passages: list[Passage]) -> str:
         return "(tidak ada kutipan relevan)"
     return "\n\n".join(
         f"[{i}] {'Berita: ' if p.source_type == 'news' else ''}{p.title}"
-        + (f", hal. {p.page}" if p.page else "")
+        + (f", hal. {p.page_start}" if p.page_start else "")
         + f"\n{p.content[:1800]}"
         for i, p in enumerate(passages, 1)
     )

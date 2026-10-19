@@ -33,13 +33,9 @@ def test_candidates_filters(monkeypatch):
     call_args = mock_col.query.call_args[1]
     where = call_args["where"]
 
-    assert "$and" in where
-    filters = where["$and"]
-    assert {"status": "approved"} in filters
-
-    today = retrieval.today_int()
-    assert {"effective_date": {"$lte": today}} in filters
-    assert {"expiry_date": {"$gte": today}} in filters
+    assert where == {
+        "$and": [{"status": "approved"}, {"expiry_date": {"$gte": retrieval.today_int()}}]
+    }
 
 
 def test_passage_metadata_mapping(monkeypatch):

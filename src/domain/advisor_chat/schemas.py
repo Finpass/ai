@@ -78,6 +78,8 @@ class CompareCtx(BaseModel):
     divYield: float | None = None
     per: float | None = None
     pbv: float | None = None
+    roe: float | None = None
+    beta: float | None = None
 
     model_config = {"populate_by_name": True}
 
@@ -126,7 +128,7 @@ class Citation(BaseModel):
 class Trace(BaseModel):
     intent: str
     tickers: list[str]
-    chunkIds: list[int]
+    chunkIds: list[str]
     topScore: float
 
 

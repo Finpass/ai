@@ -1,5 +1,5 @@
 import datetime
-import os
+import re
 from typing import Any
 
 import chromadb
@@ -16,8 +16,7 @@ _known_tickers_cache: set[str] | None = None
 def get_collection():
     global _chroma_client
     if _chroma_client is None:
-        chroma_path = os.getenv("CHROMA_PATH", "chroma_db")
-        _chroma_client = chromadb.PersistentClient(path=chroma_path)
+        _chroma_client = chromadb.PersistentClient(path=settings.chroma_path)
     return _chroma_client.get_collection("corpus_main")
 
 
@@ -47,7 +46,7 @@ def dedupe_language(passages: list[Passage], lang: str) -> list[Passage]:
     ]
 
 
-def known_tickers(conn: Any) -> set[str]:
+def known_tickers() -> set[str]:
     global _known_tickers_cache
     if _known_tickers_cache is not None:
         return _known_tickers_cache
@@ -66,15 +65,46 @@ def known_tickers(conn: Any) -> set[str]:
     return _known_tickers_cache
 
 
+_YEAR = re.compile(r"\b(20[12]\d)\b")
+# plain words in a question -> the statement names the tables actually use, so the dense search lands on them
+_EXPAND = (
+    (
+        re.compile(
+            r"\b(laba|rugi|profit|net income|earnings|pendapatan|revenue|penjualan|beban)\b", re.I
+        ),
+        "laporan laba rugi dan penghasilan komprehensif lain, penjualan, laba bruto, laba tahun berjalan, statement of profit or loss",
+    ),
+    (
+        re.compile(r"\b(aset|aktiva|liabilitas|utang|ekuitas|asset|liabilit|equity)\w*", re.I),
+        "laporan posisi keuangan, total aset, total liabilitas, total ekuitas, statement of financial position",
+    ),
+    (
+        re.compile(r"\b(arus kas|cash flow|kas)\b", re.I),
+        "laporan arus kas, arus kas dari aktivitas operasi, investasi, pendanaan, statement of cash flows",
+    ),
+)
+
+
+def years_in(text: str) -> list[int]:
+    return sorted({int(y) for y in _YEAR.findall(text)})
+
+
+def expand(query: str) -> str:
+    extra = [e for pat, e in _EXPAND if pat.search(query)]
+    return " ".join([query, *extra])
+
+
 def candidates(
-    query: str, types: list[str] | None, tickers: list[str] | None, k: int
+    query: str,
+    types: list[str] | None,
+    tickers: list[str] | None,
+    k: int,
+    year: int | None = None,
 ) -> list[Passage]:
-    # TODO: Sisipkan penggabungan BM25 + RRF di sini nanti
     vec = embedder.embed([query])[0]
 
     filters: list[dict[str, Any]] = [
         {"status": "approved"},
-        {"effective_date": {"$lte": today_int()}},
         {"expiry_date": {"$gte": today_int()}},
     ]
 
@@ -83,6 +113,9 @@ def candidates(
             filters.append({"ticker": tickers[0]})
         else:
             filters.append({"ticker": {"$in": tickers}})
+
+    if year:
+        filters.append({"tahun": year})
 
     if types:
         mapped_types = []
@@ -127,24 +160,42 @@ def candidates(
                 nomor=str(m.get("nomor", "")),
                 publisher=str(m.get("publisher", "OJK")),
                 tanggal=int(m.get("published_date", 0) if m.get("published_date") else 0),
+                tahun=int(m.get("tahun") or 0),
             )
         )
     return passages
 
 
+def _gather(query: str, types, tickers, years: list[int], k: int) -> list[Passage]:
+    """One search per year asked about, so a later year is not crowded out by the others; merged without repeats."""
+    runs = (
+        [candidates(query, types, tickers, k // len(years), y) for y in years]
+        if years
+        else [candidates(query, types, tickers, k)]
+    )
+    seen: set[str] = set()
+    out: list[Passage] = []
+    for p in (p for run in runs for p in run):
+        if p.content not in seen:
+            seen.add(p.content)
+            out.append(p)
+    return out
+
+
 def search(
-    conn: Any, message: str, history_query: str, lang: str, held_symbols: list[str]
+    message: str, history_query: str, lang: str, held_symbols: list[str]
 ) -> tuple[list[Passage], str, list[str]]:
-    known = known_tickers(conn)
+    known = known_tickers()
     mentioned = intent.mentioned_tickers(message, known)
     kind = intent.detect_intent(message, bool(mentioned))
     types = intent.source_types(kind, bool(mentioned))
     held = intent.held_tickers(held_symbols, known)
     tickers = mentioned or (held if kind == "perusahaan" else None) or None
 
-    query = history_query or message
-    k = 50
-    passages = dedupe_language(candidates(query, types, tickers, k), lang)
+    query = expand(history_query or message)
+    # years only narrow company filings; regulation and education documents are not filed per year
+    years = years_in(message) if kind == "perusahaan" else []
+    passages = dedupe_language(_gather(query, types, tickers, years, settings.rag_top_k), lang)
 
     if not passages:
         return [], kind, mentioned or held
@@ -152,8 +203,16 @@ def search(
     scores = embedder.rerank(query, [p.content for p in passages])
     for p, s in zip(passages, scores, strict=True):
         p.score = s + (0.05 if p.ticker and p.ticker in held else 0.0)
-
     passages.sort(key=lambda p: -p.score)
-    keep = [p for p in passages[: settings.rag_top_n] if p.score >= settings.rag_min_score]
+    passages = [p for p in passages if p.score >= settings.rag_min_score]
+
+    keep: list[Passage] = []
+    if years:  # best few of every year asked about first, so each year is represented
+        per_year = max(2, settings.rag_top_n // len(years))
+        for y in years:
+            keep += [p for p in passages if p.tahun == y][:per_year]
+    keep += [p for p in passages if p not in keep]
+    keep = keep[: settings.rag_top_n]
+    keep.sort(key=lambda p: -p.score)
 
     return keep, kind, mentioned or held

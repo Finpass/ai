@@ -5,13 +5,14 @@ from pathlib import Path
 
 import boto3
 
+from src.core.config import settings
+
 
 def ensure_corpus():
     """
     Fungsi ini dipanggil satu kali saat aplikasi FastAPI start (di lifespan).
     Mengunduh indeks ChromaDB dari R2 bila belum ada, dan memvalidasi versinya.
     """
-    chroma_path_str = os.getenv("CHROMA_PATH", "chroma_db")
     prefix = os.getenv("CORPUS_PREFIX", "artifacts/chroma_corpus_v1/")
     bucket = os.getenv("R2_BUCKET")
     account_id = os.getenv("R2_ACCOUNT_ID")
@@ -19,7 +20,7 @@ def ensure_corpus():
     secret_key = os.getenv("R2_SECRET_ACCESS_KEY")
     expected_embed_model = os.getenv("EMBED_MODEL", "baai/bge-m3")
 
-    chroma_path = Path(chroma_path_str)
+    chroma_path = Path(settings.chroma_path)
     manifest_path = chroma_path / "manifest.json"
 
     # 1. Unduh dari R2 jika folder/manifest belum ada

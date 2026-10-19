@@ -23,3 +23,4 @@ class Passage:
     nomor: str = ""
     publisher: str = "OJK"
     tanggal: int = 0
+    tahun: int = 0
