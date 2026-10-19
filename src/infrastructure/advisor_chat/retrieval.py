@@ -1,85 +1,42 @@
-import re
+import datetime
+import os
+from typing import Any
 
-import psycopg
+import chromadb
 
 from src.core.config import settings
 from src.domain.advisor_chat import intent
 from src.domain.advisor_chat.documents import Passage
 from src.infrastructure.advisor_chat import embedder
 
-_WORD = re.compile(r"[a-z0-9]{3,}")
-RRF_K = 60
+_chroma_client = None
+_known_tickers_cache: set[str] | None = None
 
 
-def rrf(rankings: list[list[int]], k: int = RRF_K) -> list[int]:
-    """Reciprocal rank fusion: ids ranked high in several lists first."""
-    scores: dict[int, float] = {}
-    for ranking in rankings:
-        for rank, cid in enumerate(ranking):
-            scores[cid] = scores.get(cid, 0.0) + 1.0 / (k + rank + 1)
-    return sorted(scores, key=lambda c: (-scores[c], c))
+def get_collection():
+    global _chroma_client
+    if _chroma_client is None:
+        chroma_path = os.getenv("CHROMA_PATH", "chroma_db")
+        _chroma_client = chromadb.PersistentClient(path=chroma_path)
+    return _chroma_client.get_collection("corpus_main")
 
 
-def or_query(text: str) -> str:
-    words = list(dict.fromkeys(_WORD.findall(text.lower())))[:24]
-    return " | ".join(words)
+def today_int() -> int:
+    today = datetime.date.today()
+    return today.year * 10000 + today.month * 100 + today.day
 
 
-def known_tickers(conn: psycopg.Connection) -> set[str]:
-    return {
-        r[0]
-        for r in conn.execute("SELECT DISTINCT ticker FROM rag_documents WHERE ticker IS NOT NULL")
-    }
-
-
-_FILTER = """d.status = 'active'
-  AND (%(types)s::text[] IS NULL OR d.source_type = ANY(%(types)s))
-  AND (%(tickers)s::text[] IS NULL OR d.ticker = ANY(%(tickers)s))"""
-
-
-def candidates(
-    conn: psycopg.Connection, query: str, types: list[str] | None, tickers: list[str] | None, k: int
-) -> list[int]:
-    vec = embedder.embed([query])[0]
-    params = {"types": types, "tickers": tickers, "k": k}
-    with conn.transaction():
-        conn.execute("SET LOCAL hnsw.iterative_scan = relaxed_order")
-        conn.execute("SET LOCAL hnsw.ef_search = 100")
-        dense = [
-            r[0]
-            for r in conn.execute(
-                f"SELECT c.id FROM rag_chunks c JOIN rag_documents d ON d.id = c.document_id WHERE {_FILTER} "
-                "ORDER BY c.embedding <=> %(vec)s LIMIT %(k)s",
-                {**params, "vec": vec},
-            ).fetchall()
-        ]
-    sparse: list[int] = []
-    if q := or_query(query):
-        sparse = [
-            r[0]
-            for r in conn.execute(
-                f"SELECT c.id FROM rag_chunks c JOIN rag_documents d ON d.id = c.document_id, to_tsquery('simple', %(q)s) tq "
-                f"WHERE {_FILTER} AND c.tsv @@ tq ORDER BY ts_rank_cd(c.tsv, tq) DESC LIMIT %(k)s",
-                {**params, "q": q},
-            ).fetchall()
-        ]
-    return rrf([dense, sparse])[: settings.rag_top_k]
-
-
-def load(conn: psycopg.Connection, ids: list[int]) -> list[Passage]:
-    if not ids:
-        return []
-    rows = conn.execute(
-        "SELECT c.id, d.title, d.source_type, c.page_start, c.section, c.content, d.r2_key, d.ticker "
-        "FROM rag_chunks c JOIN rag_documents d ON d.id = c.document_id WHERE c.id = ANY(%s)",
-        (ids,),
-    ).fetchall()
-    by = {r[0]: Passage(*r) for r in rows}
-    return [by[i] for i in ids if i in by]
+def map_doc_type(doc_type: str) -> str:
+    if doc_type == "regulasi":
+        return "ojk_regulasi"
+    if doc_type == "edukasi":
+        return "ojk_edukasi"
+    if doc_type == "laporan_keuangan":
+        return "idx_laporan_keuangan"
+    return doc_type
 
 
 def dedupe_language(passages: list[Passage], lang: str) -> list[Passage]:
-    """Same company-year can exist in both languages: keep the language of the question when both are present."""
     want = "idx_laporan_keuangan" if lang == "id" else "idx_financial_statement"
     other = "idx_financial_statement" if lang == "id" else "idx_laporan_keuangan"
     has_want = {(p.ticker, p.title.split(" ", 1)[0]) for p in passages if p.source_type == want}
@@ -90,8 +47,93 @@ def dedupe_language(passages: list[Passage], lang: str) -> list[Passage]:
     ]
 
 
+def known_tickers(conn: Any) -> set[str]:
+    global _known_tickers_cache
+    if _known_tickers_cache is not None:
+        return _known_tickers_cache
+
+    col = get_collection()
+    unique_tickers = set()
+    total = col.count()
+    batch_size = 5000
+    for offset in range(0, total, batch_size):
+        data = col.get(include=["metadatas"], limit=batch_size, offset=offset)
+        for m in data.get("metadatas", []):
+            if m and m.get("ticker"):
+                unique_tickers.add(m["ticker"])
+
+    _known_tickers_cache = unique_tickers
+    return _known_tickers_cache
+
+
+def candidates(
+    query: str, types: list[str] | None, tickers: list[str] | None, k: int
+) -> list[Passage]:
+    # TODO: Sisipkan penggabungan BM25 + RRF di sini nanti
+    vec = embedder.embed([query])[0]
+
+    filters: list[dict[str, Any]] = [
+        {"status": "approved"},
+        {"effective_date": {"$lte": today_int()}},
+        {"expiry_date": {"$gte": today_int()}},
+    ]
+
+    if tickers:
+        if len(tickers) == 1:
+            filters.append({"ticker": tickers[0]})
+        else:
+            filters.append({"ticker": {"$in": tickers}})
+
+    if types:
+        mapped_types = []
+        if "ojk_regulasi" in types:
+            mapped_types.append("regulasi")
+        if "ojk_edukasi" in types:
+            mapped_types.append("edukasi")
+        if "idx_laporan_keuangan" in types or "idx_financial_statement" in types:
+            mapped_types.append("laporan_keuangan")
+
+        if mapped_types:
+            if len(mapped_types) == 1:
+                filters.append({"doc_type": mapped_types[0]})
+            else:
+                filters.append({"doc_type": {"$in": mapped_types}})
+
+    where_clause = {"$and": filters} if len(filters) > 1 else filters[0]
+
+    col = get_collection()
+    res = col.query(
+        query_embeddings=[vec], n_results=k, where=where_clause, include=["documents", "metadatas"]
+    )
+
+    passages = []
+    if not res.get("documents") or not res["documents"][0]:
+        return passages
+
+    for doc, m in zip(res["documents"][0], res["metadatas"][0]):
+        if not m:
+            continue
+        passages.append(
+            Passage(
+                id=m.get("doc_id", ""),
+                title=m.get("title", ""),
+                source_type=map_doc_type(m.get("doc_type", "")),
+                page_start=int(m.get("page", 0)),
+                section=str(m.get("section", "")),
+                content=doc,
+                r2_key=str(m.get("r2_key", "")),
+                ticker=m.get("ticker") if isinstance(m.get("ticker"), str) else None,
+                tier=int(m.get("tier", 1)),
+                nomor=str(m.get("nomor", "")),
+                publisher=str(m.get("publisher", "OJK")),
+                tanggal=int(m.get("published_date", 0) if m.get("published_date") else 0),
+            )
+        )
+    return passages
+
+
 def search(
-    conn: psycopg.Connection, message: str, history_query: str, lang: str, held_symbols: list[str]
+    conn: Any, message: str, history_query: str, lang: str, held_symbols: list[str]
 ) -> tuple[list[Passage], str, list[str]]:
     known = known_tickers(conn)
     mentioned = intent.mentioned_tickers(message, known)
@@ -99,12 +141,19 @@ def search(
     types = intent.source_types(kind, bool(mentioned))
     held = intent.held_tickers(held_symbols, known)
     tickers = mentioned or (held if kind == "perusahaan" else None) or None
+
     query = history_query or message
-    ids = candidates(conn, query, types, tickers, settings.rag_top_k)
-    passages = dedupe_language(load(conn, ids), lang)
+    k = 50
+    passages = dedupe_language(candidates(query, types, tickers, k), lang)
+
+    if not passages:
+        return [], kind, mentioned or held
+
     scores = embedder.rerank(query, [p.content for p in passages])
     for p, s in zip(passages, scores, strict=True):
-        p.score = s + (0.05 if p.ticker in held else 0.0)
+        p.score = s + (0.05 if p.ticker and p.ticker in held else 0.0)
+
     passages.sort(key=lambda p: -p.score)
     keep = [p for p in passages[: settings.rag_top_n] if p.score >= settings.rag_min_score]
+
     return keep, kind, mentioned or held

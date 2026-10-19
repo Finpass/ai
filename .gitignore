@@ -7,3 +7,8 @@ __pycache__/
 .env.*
 !.env.example
 .DS_Store
+
+chroma_db/
+chroma_db_frozen/
+cache/
+manifests/

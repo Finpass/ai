@@ -8,6 +8,7 @@ dependencies = [
     "uvicorn[standard]",
     "pydantic-settings",
     "httpx2>=2.13.1",
+    "chromadb>=1.5.9",
 ]
 
 [project.optional-dependencies]
