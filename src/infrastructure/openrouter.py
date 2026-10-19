@@ -31,7 +31,10 @@ class OpenRouterClient:
         }
         if settings.openrouter_app_url:
             headers["HTTP-Referer"] = settings.openrouter_app_url
-        provider: dict[str, Any] = {"allow_fallbacks": settings.openrouter_allow_fallbacks}
+        provider: dict[str, Any] = {
+            "allow_fallbacks": settings.openrouter_allow_fallbacks,
+            "data_collection": settings.openrouter_data_collection,
+        }
         if settings.openrouter_provider_sort:
             provider["sort"] = settings.openrouter_provider_sort
         if order := [p.strip() for p in settings.openrouter_provider_order.split(",") if p.strip()]:

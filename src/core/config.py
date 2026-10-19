@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     openrouter_provider_sort: str = ""
     openrouter_provider_order: str = ""
     openrouter_allow_fallbacks: bool = True
+    # "deny": only providers that neither store nor train on prompts; "allow" if the model has none
+    openrouter_data_collection: str = "deny"
 
     # RAG (optional dependency group `rag`)
     rag_enabled: bool = True
