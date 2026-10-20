@@ -8,6 +8,7 @@ from src.domain.advisor_chat import facts, guardrail
 from src.domain.advisor_chat.documents import Passage
 from src.domain.advisor_chat.schemas import ChatRequest, ChatResponse, Citation, Trace, Turn_
 from src.infrastructure.advisor_chat import retrieval
+from src.infrastructure.observability import tracing
 from src.infrastructure.observability.narrator import Narrator
 from src.infrastructure.observability.turns import dump, turn_buffer
 from src.infrastructure.openrouter import LLMError, OpenRouterClient
@@ -138,18 +139,56 @@ async def chat(req: ChatRequest, llm: OpenRouterClient | None) -> ChatResponse:
     """Runs the pipeline and attaches the turn trail (also readable live through the turn buffer)."""
     run = req.runId or str(uuid.uuid4())
     nar = Narrator(run, req.lang, req.message, llm)
-    try:
-        resp = await _chat(req, llm, nar)
-    except Exception:
-        await nar.drain()
-        turn_buffer.emit(run, TITLES[req.lang]["error"], type="error", status="failed")
-        raise
-    await nar.drain()
-    resp.turns = [Turn_(**t) for t in dump(turn_buffer.read(run))]
+    ctx = req.userContext
+    with tracing.span(
+        "advisor_chat",
+        tracing.AGENT,
+        input=req.message,
+        track_totals=True,
+        attributes={"session.id": tracing.session_id(run), "tag.tags": ["advisor_chat", req.lang]},
+    ) as root:
+        root.metadata(
+            lang=req.lang,
+            history_turns=len(req.history),
+            has_profile=bool(ctx.profile),
+            holdings=len(ctx.holdings),
+            news_offered=len(ctx.news),
+            comparison_assets=len(ctx.comparison),
+            model=settings.rag_model or settings.openrouter_model,
+            llm_configured=llm is not None,
+        )
+        try:
+            resp = await _chat(req, llm, nar)
+        except Exception:
+            await nar.drain()
+            turn_buffer.emit(run, TITLES[req.lang]["error"], type="error", status="failed")
+            raise
+        await nar.drain()  # inside the span, so the title calls belong to this trace
+        resp.turns = [Turn_(**t) for t in dump(turn_buffer.read(run))]
+        root.output(resp.answer)
+        root.metadata(
+            source=resp.source,
+            grounded=resp.grounded,
+            citations=len(resp.citations),
+            intent=resp.trace.intent,
+            tickers=resp.trace.tickers,
+            chunk_ids=resp.trace.chunkIds,
+            top_score=resp.trace.topScore,
+            turn_titles=len(resp.turns),
+        )
+        root.ok()
     return resp
 
 
 def _finish(nar: Narrator, lang: str, resp: ChatResponse) -> ChatResponse:
+    outcome = (
+        "answer_ready"
+        if resp.source == "llm"
+        else "source_excerpts_fallback" if resp.grounded else "answer_not_found"
+    )
+    with tracing.span(outcome, tracing.CHAIN) as end:
+        end.metadata(source=resp.source, grounded=resp.grounded, citations=len(resp.citations))
+        end.output(resp.answer)
     t = TITLES[lang]
     if resp.source == "llm":
         nar.say(
@@ -173,7 +212,10 @@ async def _chat(req: ChatRequest, llm: OpenRouterClient | None, nar: Narrator) -
     nar.say(
         "search", "mencari di regulasi dan edukasi OJK serta laporan keuangan emiten", t["search"]
     )
-    docs, intent_name, tickers = await asyncio.to_thread(_search, req)
+    with tracing.span("retrieve_context", tracing.CHAIN, input=req.message) as rc:
+        docs, intent_name, tickers = await asyncio.to_thread(_search, req)
+        rc.metadata(documents=len(docs), intent=intent_name, tickers=tickers)
+        rc.output([{"title": p.title, "score": round(p.score, 3)} for p in docs])
     if docs:
         names = "; ".join(p.title for p in docs[:3])
         nar.say(
@@ -183,7 +225,10 @@ async def _chat(req: ChatRequest, llm: OpenRouterClient | None, nar: Narrator) -
         )
     else:
         nar.say("found", "tidak ada dokumen yang cocok dengan pertanyaan", t["none"])
-    news = facts.news_passages(req.userContext.news) if len(docs) < NEWS_WHEN_DOCS_BELOW else []
+    with tracing.span("add_news_context", tracing.CHAIN) as nw:
+        low = len(docs) < NEWS_WHEN_DOCS_BELOW
+        news = facts.news_passages(req.userContext.news) if low else []
+        nw.metadata(documents_found=len(docs), threshold=NEWS_WHEN_DOCS_BELOW, news_added=len(news))
     if news:
         names = "; ".join(p.title for p in news[:3])
         nar.say(
@@ -236,44 +281,59 @@ async def _chat(req: ChatRequest, llm: OpenRouterClient | None, nar: Narrator) -
             nar.say("write", f"menyusun jawaban dari {used}", t["write"])
         else:
             nar.say("recheck", f"jawaban pertama ditolak pemeriksaan: {fix}", t["recheck"])
-        try:
-            answer = (
-                await llm.complete(
-                    _messages(req, passages, fix),
-                    json_mode=False,
-                    max_tokens=1200,
-                    timeout_seconds=settings.rag_chat_timeout_seconds,
-                    model=settings.rag_model or None,
+        with tracing.span("generate_answer", tracing.CHAIN) as ga:
+            ga.metadata(attempt=attempt + 1, retry_reason=fix or None, passages=len(passages))
+            try:
+                answer = (
+                    await llm.complete(
+                        _messages(req, passages, fix),
+                        json_mode=False,
+                        max_tokens=1200,
+                        timeout_seconds=settings.rag_chat_timeout_seconds,
+                        model=settings.rag_model or None,
+                    )
+                ).strip()
+            except LLMError:
+                ga.metadata(llm_failed=True)
+                break
+            ga.output(answer)
+            with tracing.span("guardrail_check", tracing.GUARDRAIL, input=answer) as gc:
+                gap = guardrail.admits_gap(answer) and not guardrail.used_markers(
+                    answer, len(passages)
                 )
-            ).strip()
-        except LLMError:
-            break
-        gap = guardrail.admits_gap(answer) and not guardrail.used_markers(answer, len(passages))
-        bad = guardrail.violations(answer, len(passages))
-        if not bad:
-            used_n = guardrail.used_markers(answer, len(passages))
-            answer = _with_note(answer, req.lang)
-            if gap:
+                bad = guardrail.violations(answer, len(passages))
+                gc.metadata(
+                    passed=not bad,
+                    violations=bad,
+                    admits_gap=gap,
+                    citation_markers=guardrail.used_markers(answer, len(passages)),
+                    passages=len(passages),
+                )
+                gc.output("pass" if not bad else "; ".join(bad))
+            if not bad:
+                used_n = guardrail.used_markers(answer, len(passages))
+                answer = _with_note(answer, req.lang)
+                if gap:
+                    return _finish(
+                        nar,
+                        req.lang,
+                        ChatResponse(
+                            answer=answer, citations=[], grounded=False, source="llm", trace=trace
+                        ),
+                    )
                 return _finish(
                     nar,
                     req.lang,
                     ChatResponse(
-                        answer=answer, citations=[], grounded=False, source="llm", trace=trace
+                        answer=answer,
+                        citations=_citations(passages, used_n),
+                        grounded=bool(passages),
+                        source="llm",
+                        trace=trace,
                     ),
                 )
-            return _finish(
-                nar,
-                req.lang,
-                ChatResponse(
-                    answer=answer,
-                    citations=_citations(passages, used_n),
-                    grounded=bool(passages),
-                    source="llm",
-                    trace=trace,
-                ),
-            )
-        logger.info("guardrail rejected answer: %s", "; ".join(bad))
-        fix = "; ".join(bad)
+            logger.info("guardrail rejected answer: %s", "; ".join(bad))
+            fix = "; ".join(bad)
     if not passages:
         return _finish(
             nar,
