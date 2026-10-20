@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     rag_llm_titles: bool = True
     rag_max_concurrent: int = 8
 
+    # Error reporting (Sentry). Off when empty.
+    sentry_dsn: str = ""
+
     # Tracing (Arize Phoenix). On when an endpoint is set, unless TRACING_ENABLED says otherwise.
     tracing_enabled: bool | None = None
     # http://localhost:6006 for a local Phoenix, or the Phoenix Cloud space URL
