@@ -232,11 +232,12 @@ def search(
             {"intent": kind, "tickers": tickers, "source_types": types, "years": years, "query": query}
         )
 
-    with tracing.span("gather_candidates", tracing.CHAIN) as gather:
+    with tracing.span("gather_candidates", tracing.CHAIN, input=query) as gather:
         raw = _gather(query, types, tickers, years, settings.rag_top_k)
         passages = dedupe_language(raw, lang)
         gather.metadata(top_k=settings.rag_top_k, searches=max(len(years), 1), candidates=len(raw),
                         after_language_dedupe=len(passages))
+        gather.output([{"id": p.id, "title": p.title, "score": round(p.score, 4)} for p in passages])
 
     if not passages:
         tracing.current().metadata(no_candidates=True)
@@ -262,7 +263,7 @@ def search(
             candidates=len(passages), held_boost=0.05, best_score=round(passages[0].score, 4)
         )
 
-    with tracing.span("select_passages", tracing.CHAIN) as pick:
+    with tracing.span("select_passages", tracing.CHAIN, input=query) as pick:
         passages = [p for p in passages if p.score >= settings.rag_min_score]
         above_cutoff = len(passages)
 

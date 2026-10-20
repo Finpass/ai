@@ -225,10 +225,11 @@ async def _chat(req: ChatRequest, llm: OpenRouterClient | None, nar: Narrator) -
         )
     else:
         nar.say("found", "tidak ada dokumen yang cocok dengan pertanyaan", t["none"])
-    with tracing.span("add_news_context", tracing.CHAIN) as nw:
+    with tracing.span("add_news_context", tracing.CHAIN, input=req.message) as nw:
         low = len(docs) < NEWS_WHEN_DOCS_BELOW
         news = facts.news_passages(req.userContext.news) if low else []
         nw.metadata(documents_found=len(docs), threshold=NEWS_WHEN_DOCS_BELOW, news_added=len(news))
+        nw.output([p.title for p in news] if news else "no news added")
     if news:
         names = "; ".join(p.title for p in news[:3])
         nar.say(
@@ -281,7 +282,7 @@ async def _chat(req: ChatRequest, llm: OpenRouterClient | None, nar: Narrator) -
             nar.say("write", f"menyusun jawaban dari {used}", t["write"])
         else:
             nar.say("recheck", f"jawaban pertama ditolak pemeriksaan: {fix}", t["recheck"])
-        with tracing.span("generate_answer", tracing.CHAIN) as ga:
+        with tracing.span("generate_answer", tracing.CHAIN, input=req.message) as ga:
             ga.metadata(attempt=attempt + 1, retry_reason=fix or None, passages=len(passages))
             try:
                 answer = (

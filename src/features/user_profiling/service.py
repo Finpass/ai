@@ -78,16 +78,19 @@ async def explain(req: ExplainRequest, llm: OpenRouterClient | None) -> ExplainR
     with tracing.span(
         "explain_profile",
         tracing.AGENT,
+        input=req.model_dump(mode="json"),
         track_totals=True,
         attributes={"tag.tags": ["profile_explanation", req.locale]},
     ) as root:
         with tracing.span("build_facts", tracing.CHAIN) as bf:
             f = facts_mod.build(req)
+            bf.input(req.model_dump(mode="json"))
             # scores and levels only: no amounts and no name
             bf.metadata(
                 locale=req.locale, level=f.level, profile=f.profile, category=f.category,
                 total_score=f.total, provisional=f.provisional,
             )
+            bf.output(facts_mod.prompt_facts(f))
         parts = await _generate(f, llm) if llm else None
         if parts is None:
             with tracing.span("template_fallback", tracing.CHAIN) as tf:
