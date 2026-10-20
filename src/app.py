@@ -28,7 +28,12 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(
-    title="Shenzen AI", docs_url=None if settings.is_production else "/docs", lifespan=lifespan
+    title="Shenzen AI",
+    docs_url=None if settings.is_production else "/docs",
+    lifespan=lifespan,
+    # FastAPI 0.143 traces HTTP requests and dependencies itself. Those spans have no input or output and the
+    # turn-title polling floods Phoenix, so only the spans we open by hand (tracing.py) are exported.
+    telemetry={"tracing": False, "operation_spans": False, "metrics": False, "logs": False},
 )
 
 tracing.setup_tracing()  # Phoenix: the spans we open by hand (see tracing.py)
