@@ -62,6 +62,7 @@ The suite needs no network, no API key and no model download (the LLM, embedding
 | `tests/test_profile.py` | profile facts, number guardrail, template fallback, EN/ID wording |
 | `tests/test_hardening.py` | prompt fencing, key rotation, provider settings |
 | `tests/test_tracing.py` | Phoenix spans, token and cost totals, hidden content |
+| `tests/test_security_edge.py` | 46 hostile-input cases: auth bypass, payload bombs, prompt injection, data leakage, output safety, concurrency; see the [edge case report](https://github.com/Finpass/documentation/blob/main/security-edge-case-report.md) |
 | `tests/test_config.py` | production refuses dev secrets |
 | `tests/test_chroma_retrieval.py` | Chroma retrieval and reranking against a small index |
 
