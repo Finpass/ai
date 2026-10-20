@@ -4,6 +4,7 @@ from typing import Any
 import httpx2 as httpx
 
 from src.core.config import settings
+from src.infrastructure.observability import tracing
 
 logger = logging.getLogger("openrouter")
 
@@ -24,6 +25,7 @@ class OpenRouterClient:
         max_tokens: int = 900,
         timeout_seconds: float | None = None,
         model: str | None = None,
+        purpose: str = "chat_completion",
     ) -> str:
         headers = {
             "Authorization": f"Bearer {settings.openrouter_api_key}",
@@ -46,21 +48,36 @@ class OpenRouterClient:
             "max_tokens": max_tokens,
             "provider": provider,
             "reasoning": {"enabled": False},
+            "usage": {"include": True},  # OpenRouter then reports tokens and the exact cost in USD
         }
         if json_mode:
             body["response_format"] = {"type": "json_object"}
         url = settings.openrouter_base_url.rstrip("/") + "/chat/completions"
         limit = timeout_seconds or settings.openrouter_timeout_seconds
-        try:
-            async with httpx.AsyncClient(transport=self._transport, timeout=limit) as http:
-                resp = await http.post(url, json=body, headers=headers)
-            resp.raise_for_status()
-            data: Any = resp.json()
-            content = data["choices"][0]["message"]["content"]
-        except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
-            logger.warning("openrouter call failed: %s", type(exc).__name__)
-            raise LLMError(type(exc).__name__) from exc
-        if not isinstance(content, str):
-            logger.warning("openrouter returned no text content")
-            raise LLMError("non-text content")
-        return content
+        shown = ("temperature", "max_tokens", "provider", "response_format")
+        params = {k: body[k] for k in shown if k in body}
+        with tracing.llm_span(
+            purpose,
+            model=body["model"],
+            messages=messages,
+            params=params,
+            purpose=purpose,
+        ) as t:
+            try:
+                async with httpx.AsyncClient(transport=self._transport, timeout=limit) as http:
+                    resp = await http.post(url, json=body, headers=headers)
+                resp.raise_for_status()
+                data: Any = resp.json()
+                content = data["choices"][0]["message"]["content"]
+            except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
+                logger.warning("openrouter call failed: %s", type(exc).__name__)
+                err = LLMError(type(exc).__name__)
+                t.fail(err)
+                raise err from exc
+            if not isinstance(content, str):
+                logger.warning("openrouter returned no text content")
+                err = LLMError("non-text content")
+                t.fail(err)
+                raise err
+            tracing.llm_result(t, content, data)
+            return content

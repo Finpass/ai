@@ -71,7 +71,11 @@ class Narrator:
 
         try:
             out = await self._llm.complete(
-                messages, json_mode=False, max_tokens=40, timeout_seconds=_TITLE_TIMEOUT
+                messages,
+                json_mode=False,
+                max_tokens=40,
+                timeout_seconds=_TITLE_TIMEOUT,
+                purpose=f"turn_title:{step}",
             )
         except LLMError:
             return None
