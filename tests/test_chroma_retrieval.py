@@ -5,7 +5,7 @@ import pytest
 from src.infrastructure.advisor_chat import embedder, retrieval
 
 
-def mock_embed(texts):
+def mock_embed(texts, fast=False):
     return [[0.1] * 1024]
 
 
