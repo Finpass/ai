@@ -63,7 +63,7 @@ class Narrator:
         if self._llm is None or not settings.rag_llm_titles:
             return None
 
-        user = f"Pertanyaan user: {self._question}\nLangkah: {step}\nFAKTA: {facts}"
+        user = f"Langkah: {step}\nFAKTA: {facts}"
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": load(f"turn_title_system_{self._lang}")},
             {"role": "user", "content": user},
