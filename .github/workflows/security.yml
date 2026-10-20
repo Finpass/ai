@@ -11,18 +11,18 @@ jobs:
   scan:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
       - name: Known vulnerabilities in dependencies
-        run: uv export --frozen --no-dev --extra rag --no-hashes -o /tmp/req.txt && uvx pip-audit -r /tmp/req.txt --no-deps --disable-pip
+        run: uv export --frozen --no-dev --extra rag --no-hashes -o /tmp/req.txt && uvx pip-audit==2.10.1 -r /tmp/req.txt --no-deps --disable-pip
       - name: Static analysis
-        run: uvx bandit -r src -ll -q
-      - uses: aquasecurity/trivy-action@0.28.0
+        run: uvx bandit==1.9.4 -r src -ll -q
+      - uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
         with:
           scan-type: fs
           severity: CRITICAL,HIGH
