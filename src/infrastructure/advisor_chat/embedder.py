@@ -76,30 +76,39 @@ def _parse(batch: list[str], body: object) -> list[list[float]]:
     return vectors
 
 
-def _embed_batch(http: httpx.Client, batch: list[str]) -> list[list[float]]:
+def _embed_batch(
+    http: httpx.Client, batch: list[str], attempts: int = MAX_ATTEMPTS
+) -> list[list[float]]:
     url = OPENROUTER_BASE_URL.rstrip("/") + "/embeddings"
     headers = {"Authorization": f"Bearer {_api_key()}"}
     payload = {"model": EMBED_MODEL, "input": batch, "encoding_format": "float"}
-    for attempt in range(MAX_ATTEMPTS):
+    for attempt in range(attempts):
         try:
             response = http.post(url, headers=headers, json=payload)
         except httpx.TransportError:
             response = None
+
         if response is not None and response.status_code < 400:
             return _parse(batch, response.json())
+
         retryable = response is None or response.status_code == 429 or response.status_code >= 500
-        if not retryable or attempt == MAX_ATTEMPTS - 1:
+        if not retryable or attempt == attempts - 1:
             detail = "koneksi gagal" if response is None else f"HTTP {response.status_code}"
             raise RuntimeError(f"embedding gagal: {detail}")
+
         time.sleep(min(2.0**attempt, 30.0))
     raise RuntimeError("tidak tercapai")
 
 
-def embed(texts: list[str], batch_size: int = 16) -> list[list[float]]:
+def embed(texts: list[str], batch_size: int = 16, *, fast: bool = False) -> list[list[float]]:
+    # Jika fast=True, batasi maksimal 2 attempt dan timeout 10 detik
+    attempts, timeout = (2, 10.0) if fast else (MAX_ATTEMPTS, REQUEST_TIMEOUT_SECONDS)
     vectors: list[list[float]] = []
-    with httpx.Client(timeout=REQUEST_TIMEOUT_SECONDS) as http:
+
+    with httpx.Client(timeout=timeout) as http:
         for start in range(0, len(texts), batch_size):
-            vectors.extend(_embed_batch(http, texts[start : start + batch_size]))
+            vectors.extend(_embed_batch(http, texts[start : start + batch_size], attempts))
+
     return vectors
 
 

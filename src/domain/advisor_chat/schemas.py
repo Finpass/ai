@@ -40,6 +40,12 @@ class ProfileCtx(_NullAsMissing):
     heldKinds: list[str] = []
     priorities: list[str] = []
 
+    # NEW: Validator untuk membatasi panjang teks bebas `goal` (Maks. 200 karakter)
+    @field_validator("goal", mode="after")
+    @classmethod
+    def _trim_goal(cls, v: str | None) -> str | None:
+        return v[:200] if v else v
+
 
 class HoldingCtx(BaseModel):
     symbol: str
@@ -47,6 +53,12 @@ class HoldingCtx(BaseModel):
     assetClass: str = ""
     weightPct: float = 0
     valueIDR: int = 0
+
+    # NEW: Validator untuk membatasi panjang teks bebas `name` (Maks. 120 karakter)
+    @field_validator("name", mode="after")
+    @classmethod
+    def _trim_name(cls, v: str) -> str:
+        return v[:120]
 
 
 class RecAsset(BaseModel):
