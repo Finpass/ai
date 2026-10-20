@@ -12,6 +12,7 @@ dependencies = [
     "arize-phoenix-otel>=0.17",
     "opentelemetry-instrumentation-fastapi",
     "openinference-instrumentation-openai",
+    "sentry-sdk[fastapi]>=2.72.0",
 ]
 
 
