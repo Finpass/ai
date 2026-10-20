@@ -101,7 +101,7 @@ def candidates(
     k: int,
     year: int | None = None,
 ) -> list[Passage]:
-    vec = embedder.embed([query])[0]
+    vec = embedder.embed([query], fast=True)[0]
 
     filters: list[dict[str, Any]] = [
         {"status": "approved"},

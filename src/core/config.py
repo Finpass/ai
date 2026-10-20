@@ -19,23 +19,26 @@ class Settings(BaseSettings):
     openrouter_provider_sort: str = ""
     openrouter_provider_order: str = ""
     openrouter_allow_fallbacks: bool = True
-    # "deny": only providers that neither store nor train on prompts; "allow" if the model has none
     openrouter_data_collection: str = "deny"
 
     # RAG (optional dependency group `rag`)
     rag_enabled: bool = True
-    rag_model: str = ""  # chat model for the advisory bot; empty means openrouter_model
+    rag_model: str = ""
     r2_endpoint: str = ""
     r2_bucket: str = "setagama-core"
     r2_access_key_id: str = ""
     r2_secret_access_key: str = ""
     embed_model: str = "BAAI/bge-m3"
-    chroma_path: str = "artifacts/chroma_corpus_v1"
+    chroma_path: str = "artifacts/chroma_corpus_v2"
     rerank_model: str = "BAAI/bge-reranker-v2-m3"
     rag_top_k: int = 50
     rag_top_n: int = 10
     rag_min_score: float = 0.15
-    rag_chat_timeout_seconds: float = 45
+    rag_chat_timeout_seconds: float = 20
+
+    rag_enforce_numbers: bool = False
+    rag_llm_titles: bool = True
+    rag_max_concurrent: int = 8
 
     @property
     def is_production(self) -> bool:

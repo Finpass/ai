@@ -8,7 +8,9 @@ from src.core.errors import unauthorized
 
 
 async def _check_key(x_internal_api_key: Annotated[str | None, Header()] = None) -> None:
-    if not x_internal_api_key or not compare_digest(x_internal_api_key, settings.internal_api_key):
+    if not x_internal_api_key or not compare_digest(
+        x_internal_api_key.encode(), settings.internal_api_key.encode()
+    ):
         raise unauthorized("Invalid internal API key")
 
 

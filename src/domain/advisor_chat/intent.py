@@ -9,7 +9,9 @@ PERUSAHAAN = re.compile(
     re.I,
 )
 PORTOFOLIO = re.compile(
-    r"\b(portofolio|portfolio|holding|alokasi|allocation|rekomendasi|recommended|profil saya|my profile|my portfolio)\b",
+    r"\b(portofolio|portfolio|holding|alokasi|allocation"
+    r"|rekomendasi (?:portofolio|produk|aset|saya)|recommended (?:portfolio|allocation)"
+    r"|profil saya|my profile|my portfolio)\b",
     re.I,
 )
 TICKER = re.compile(r"\b([A-Z]{4})(?:\.JK)?\b")
