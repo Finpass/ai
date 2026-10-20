@@ -34,7 +34,7 @@ app = FastAPI(
     docs_url=None if settings.is_production else "/docs",
     lifespan=lifespan,
     # FastAPI 0.143 traces HTTP requests itself. Those spans have no input or output and the
-    # turn-title polling floods Phoenix, so only the spans we open by hand (tracing.py) are exported.
+    # turn-title polling floods Phoenix, so only the spans we open by hand are exported.
     telemetry={"tracing": False, "operation_spans": False, "metrics": False, "logs": False},
 )
 
