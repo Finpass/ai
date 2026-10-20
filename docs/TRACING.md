@@ -34,7 +34,7 @@ Phoenix Cloud: set `PHOENIX_COLLECTOR_ENDPOINT` to your space URL (`https://app.
 ## What one chat turn looks like
 
 ```
-POST /ml/rag/chat                      HTTP span from the FastAPI instrumentor
+advisor_chat                         AGENT root (no HTTP server spans)
 └─ advisor_chat                [AGENT]       question, answer; totals for tokens and cost
    ├─ retrieve_context         [CHAIN]
    │  ├─ plan_retrieval        [CHAIN]       intent, tickers, source types, years, expanded query
@@ -86,3 +86,23 @@ uv run pytest tests/test_tracing.py     # span tree, nesting, tokens, cost, hidd
 
 If spans do not arrive: look for `Failed to export spans` in the service log. A `405` means the URL is wrong
 (the service adds `/v1/traces`; do not point at a different path). A `401` means the API key is missing or wrong.
+
+
+## Cost shows 0 in Phoenix
+
+Phoenix computes cost itself, from token counts and its own price table. It ignores the cost we put on the span
+(`llm.cost.total` and the `cost_usd` in the root metadata stay, as the exact figure OpenRouter charged). Models
+reached through OpenRouter are mostly missing from that table, so their cost is 0 until they are added. Run once
+per Phoenix instance, and again after changing a model:
+
+    PHOENIX_COLLECTOR_ENDPOINT=... PHOENIX_API_KEY=... uv run python scripts/phoenix_sync_prices.py
+
+It reads the prices from OpenRouter and creates the chat, answer and embedding models in Phoenix. Models it cannot
+find are listed; add those by hand under Settings > Models.
+
+## Empty input and output
+
+With `TRACING_CAPTURE_CONTENT` off (the production default) the input and output columns show
+`[content hidden: N chars ...]` instead of the text. Set it to `true` to see the real text, knowing that prompts
+carry the user's financial data and go to the Phoenix host. There are no HTTP server spans any more; each trace
+starts at `advisor_chat` or `explain_profile`.
