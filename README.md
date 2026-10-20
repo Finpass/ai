@@ -30,3 +30,7 @@ Rules:
 - Responses use `Success[T]` from `core/envelope.py`. The error shape is produced only by `core/error_handler.py`.
 
 Contract (shared with backend and frontend): `../backend/docs/error-contract.md`.
+
+## Tracing
+
+Traces, token counts and cost for every chat turn and profile explanation can be sent to Arize Phoenix. Setup, the span tree and privacy settings: [docs/TRACING.md](docs/TRACING.md).
