@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 import uuid
 
 from src.core.config import settings
@@ -26,11 +27,19 @@ FALLBACK_HEAD = {
 }
 
 
+_TAGS = re.compile(r"</?\s*(?:fakta|sumber)\s*>", re.IGNORECASE)
+
+
+def _fence(text: str) -> str:
+    """Untrusted text (news, documents) cannot close or reopen the blocks the prompt tells the model to treat as data."""
+    return _TAGS.sub("", text)
+
+
 def _messages(req: ChatRequest, passages: list[Passage], fix: str = "") -> list[dict[str, str]]:
     system = (
         load(f"advisor_chat_system_{req.lang}")
-        + f"\n\nFAKTA USER:\n{facts.facts_text(req.userContext)}"
-        + f"\n\nKUTIPAN SUMBER:\n{facts.passages_text(passages)}"
+        + f"\n\nFAKTA USER:\n<fakta>\n{_fence(facts.facts_text(req.userContext))}\n</fakta>"
+        + f"\n\nKUTIPAN SUMBER:\n<sumber>\n{_fence(facts.passages_text(passages))}\n</sumber>"
     )
     msgs = [{"role": "system", "content": system}]
     msgs += [{"role": t.role, "content": _strip_note(t.content)} for t in req.history[-6:]]
@@ -160,7 +169,7 @@ def _finish(nar: Narrator, lang: str, resp: ChatResponse) -> ChatResponse:
 
 async def _chat(req: ChatRequest, llm: OpenRouterClient | None, nar: Narrator) -> ChatResponse:
     t = TITLES[req.lang]
-    nar.say("read", f"pertanyaan user: {req.message}", t["read"])
+    nar.say("read", "pertanyaan pengguna diterima", t["read"])
     nar.say(
         "search", "mencari di regulasi dan edukasi OJK serta laporan keuangan emiten", t["search"]
     )
