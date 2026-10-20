@@ -2,8 +2,7 @@
 
 One chat turn becomes one trace shaped like this (kind in brackets):
 
-    POST /ml/rag/chat                     [HTTP server span from the FastAPI instrumentor]
-    └─ advisor_chat                       [AGENT]      input = question, output = answer, totals for tokens and cost
+    advisor_chat                       [AGENT]      input = question, output = answer, totals for tokens and cost
        ├─ retrieve_context                [CHAIN]
        │  ├─ plan_retrieval               [CHAIN]      intent, tickers, source types, years, expanded query
        │  ├─ gather_candidates            [CHAIN]
@@ -18,7 +17,8 @@ One chat turn becomes one trace shaped like this (kind in brackets):
        ├─ source_excerpts_fallback        [CHAIN]      only when the answer was refused twice
        └─ turn_title:<step> ...           [LLM]        the small calls that write progress titles
 
-The profile explanation is traced the same way under `explain_profile`.
+The profile explanation is traced the same way under `explain_profile`. There are no HTTP server spans: they
+had no input or output, and the polling endpoint for turn titles flooded the project.
 
 Tracing never changes behavior: with it off, or if anything in here fails, every helper is a no-op. Content
 (questions, prompts, answers, user facts) is exported only when `capture_content` is on. It defaults to on in
@@ -81,7 +81,7 @@ def collector_url(endpoint: str) -> tuple[str, str]:
     return url + "/v1/traces", "http/protobuf"
 
 
-def setup_tracing(app: Any | None = None) -> bool:
+def setup_tracing() -> bool:
     """Connects the service to Phoenix. Returns True when tracing is on. Never raises."""
     global _tracer
     if not settings.tracing_active:
@@ -106,12 +106,6 @@ def setup_tracing(app: Any | None = None) -> bool:
             verbose=False,
         )
         _tracer = provider.get_tracer(_TRACER_NAME)
-        if app is not None:
-            from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-
-            FastAPIInstrumentor.instrument_app(
-                app, excluded_urls="health", exclude_spans=["receive", "send"]
-            )
         logger.info(
             "tracing on: project=%s content=%s",
             settings.phoenix_project_name,
@@ -195,11 +189,14 @@ class Trace:
         self._io("output", value, mime)
 
     def _io(self, side: str, value: Any, mime: str | None) -> None:
-        if self._span is None or value is None or not capture_content():
+        if self._span is None or value is None:
             return
         text, auto = (
             (value, "text/plain") if isinstance(value, str) else (_json(value), "application/json")
         )
+        if not capture_content():  # never leave the column empty: say what was withheld
+            text = f"[content hidden: {len(text)} chars; TRACING_CAPTURE_CONTENT=true shows it]"
+            auto = "text/plain"
         self.attr(f"{side}.value", _clip(text, _TEXT_LIMIT))
         self.attr(f"{side}.mime_type", mime or auto)
 
@@ -337,9 +334,9 @@ def llm_span(
                     f"llm.input_messages.{i}.message.content",
                     _clip(str(m.get("content", "")), _TEXT_LIMIT),
                 )
-            last_user = next((m for m in reversed(messages) if m.get("role") == "user"), None)
-            if last_user:
-                t.input(str(last_user.get("content", "")))
+        last_user = next((m for m in reversed(messages) if m.get("role") == "user"), None)
+        if last_user:
+            t.input(str(last_user.get("content", "")))
         yield t
 
 
@@ -356,7 +353,7 @@ def llm_result(t: Trace, content: str, data: Mapping[str, Any]) -> None:
     if capture_content():
         t.attr("llm.output_messages.0.message.role", "assistant")
         t.attr("llm.output_messages.0.message.content", _clip(content, _TEXT_LIMIT))
-        t.output(content)
+    t.output(content)
     t.ok()
 
 
@@ -375,7 +372,7 @@ def embedding_span(texts: Sequence[str], *, model: str, dimensions: int) -> Iter
         if capture_content():
             for i, text in enumerate(texts):
                 t.attr(f"embedding.embeddings.{i}.embedding.text", _clip(text, 2000))
-            t.input(list(texts) if len(texts) > 1 else texts[0])
+        t.input(list(texts) if len(texts) > 1 else texts[0])
         yield t
 
 

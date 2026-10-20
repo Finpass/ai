@@ -108,7 +108,10 @@ def test_content_is_withheld_when_capture_is_off(spans, monkeypatch):
         priced_client("rahasia").complete([{"role": "user", "content": "gaji saya 20 juta"}])
     )
     (s,) = spans.get_finished_spans()
-    assert not [k for k in s.attributes if "content" in k or k in ("input.value", "output.value")]
+    assert not [k for k in s.attributes if "message.content" in k]
+    for side in ("input.value", "output.value"):  # never empty, never the text itself
+        assert s.attributes[side].startswith("[content hidden")
+    assert "gaji" not in str(dict(s.attributes)) and "rahasia" not in str(dict(s.attributes))
     assert s.attributes["llm.token_count.total"] == 120 and s.attributes["llm.cost.total"] > 0
 
 

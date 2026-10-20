@@ -31,7 +31,7 @@ app = FastAPI(
     title="Shenzen AI", docs_url=None if settings.is_production else "/docs", lifespan=lifespan
 )
 
-tracing.setup_tracing(app)  # Phoenix: HTTP spans plus the spans we open by hand (see tracing.py)
+tracing.setup_tracing()  # Phoenix: the spans we open by hand (see tracing.py)
 
 app.add_middleware(RequestContextMiddleware)
 add_error_handlers(app)
