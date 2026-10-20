@@ -85,4 +85,5 @@ The service is one container: `Dockerfile` builds with uv (CPU-only torch), runs
 | `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `RAG_MODEL` | LLM access and models |
 | `R2_ENDPOINT`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | where the RAG index is downloaded from (use a read-only key) |
 | `CHROMA_PATH` | local folder for the index |
+| `SENTRY_DSN` | optional error reporting to Sentry; empty turns it off. No prompts, request bodies or user data are sent |
 | `PHOENIX_COLLECTOR_ENDPOINT`, `PHOENIX_API_KEY` | optional tracing; see [docs/TRACING.md](docs/TRACING.md) |
