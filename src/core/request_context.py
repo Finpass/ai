@@ -1,4 +1,5 @@
 import logging
+import re
 import secrets
 from contextvars import ContextVar
 
@@ -6,6 +7,7 @@ from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 REQUEST_ID_HEADER = "x-request-id"
+_SAFE_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 request_id_var: ContextVar[str | None] = ContextVar("request_id", default=None)
 logger = logging.getLogger("app")
 
@@ -20,7 +22,8 @@ class RequestContextMiddleware:
             return
 
         inbound = Headers(scope=scope).get(REQUEST_ID_HEADER, "")
-        rid = inbound if 0 < len(inbound) <= 64 else secrets.token_hex(8)
+        # only a plain token is echoed and logged; anything else would be log or header injection
+        rid = inbound if _SAFE_ID.fullmatch(inbound) else secrets.token_hex(8)
         token = request_id_var.set(rid)
 
         started = False

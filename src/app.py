@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from src.core.body_limit import BodyLimitMiddleware
 from src.core.config import settings
 from src.core.envelope import Success
 from src.core.error_handler import add_error_handlers
@@ -32,6 +33,8 @@ errors.setup_error_reporting()  # before the app exists, so Sentry can hook Fast
 app = FastAPI(
     title="Shenzen AI",
     docs_url=None if settings.is_production else "/docs",
+    redoc_url=None if settings.is_production else "/redoc",
+    openapi_url=None if settings.is_production else "/openapi.json",
     lifespan=lifespan,
     # FastAPI 0.143 traces HTTP requests itself. Those spans have no input or output and the
     # turn-title polling floods Phoenix, so only the spans we open by hand are exported.
@@ -40,6 +43,7 @@ app = FastAPI(
 
 tracing.setup_tracing()  # Phoenix: the spans we open by hand (see tracing.py)
 
+app.add_middleware(BodyLimitMiddleware)
 app.add_middleware(RequestContextMiddleware)
 add_error_handlers(app)
 

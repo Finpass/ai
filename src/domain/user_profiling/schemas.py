@@ -12,7 +12,7 @@ class Persona(BaseModel):
 class Flag(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    code: str
+    code: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")  # goes into the prompt, so no free text
 
 
 class TargetMonths(BaseModel):
@@ -60,7 +60,7 @@ class ProfileResult(BaseModel):
     ladderProgress: float = Field(ge=0, le=100)
     emergencyFundMonths: float = Field(ge=0)
     emergencyTargetMonths: TargetMonths
-    flags: list[Flag] = []
+    flags: list[Flag] = Field(default=[], max_length=50)
     financialHealth: FinancialHealth
     metrics: Metrics
 
@@ -71,7 +71,7 @@ class ExplainRequest(BaseModel):
     locale: Literal["id", "en"] = "id"
     persona: Persona = Persona()
     result: ProfileResult
-    answers: dict[str, Any] = {}
+    answers: dict[str, Any] = Field(default={}, max_length=200)
 
 
 class ExplainResponse(BaseModel):

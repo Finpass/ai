@@ -1,14 +1,29 @@
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
+
+Short = Annotated[str, StringConstraints(max_length=120)]
 
 
-class Turn(BaseModel):
+class _Strict(BaseModel):
+    """Every model here refuses NaN and Infinity, which would otherwise be printed into the prompt."""
+
+    model_config = ConfigDict(allow_inf_nan=False)
+
+
+class Turn(_Strict):
     role: Literal["user", "assistant"]
     content: str = Field(max_length=4000)
 
 
-class _NullAsMissing(BaseModel):
+class _NullAsMissing(_Strict):
     """Go encodes an empty slice it never initialised as null; treat null as 'not sent' so defaults apply."""
 
     @model_validator(mode="before")
@@ -18,11 +33,11 @@ class _NullAsMissing(BaseModel):
 
 
 class ProfileCtx(_NullAsMissing):
-    riskProfile: str
+    riskProfile: Short
     ladderLevel: int
-    sharia: str = "no"
+    sharia: Short = "no"
     horizonYears: float = 0
-    goal: str | None = None
+    goal: str | None = Field(default=None, max_length=2000)
     goalAmountIDR: int | None = None
     incomeIDR: int | None = None
     expensesIDR: int | None = None
@@ -31,14 +46,14 @@ class ProfileCtx(_NullAsMissing):
     savingsIDR: int | None = None
     investableIDR: int | None = None
     dependents: int | None = None
-    employment: str | None = None
-    knowledge: str | None = None
+    employment: Short | None = None
+    knowledge: Short | None = None
     emergencyMonths: float | None = None
     emergencyTargetMonths: float | None = None
-    healthCategory: str | None = None
+    healthCategory: Short | None = None
     healthScore: float | None = None
-    heldKinds: list[str] = []
-    priorities: list[str] = []
+    heldKinds: list[Short] = Field(default=[], max_length=30)
+    priorities: list[Short] = Field(default=[], max_length=20)
 
     # NEW: Validator untuk membatasi panjang teks bebas `goal` (Maks. 200 karakter)
     @field_validator("goal", mode="after")
@@ -47,10 +62,10 @@ class ProfileCtx(_NullAsMissing):
         return v[:200] if v else v
 
 
-class HoldingCtx(BaseModel):
-    symbol: str
-    name: str = ""
-    assetClass: str = ""
+class HoldingCtx(_Strict):
+    symbol: Annotated[str, StringConstraints(max_length=24)]
+    name: str = Field(default="", max_length=2000)
+    assetClass: Short = ""
     weightPct: float = 0
     valueIDR: int = 0
 
@@ -61,27 +76,27 @@ class HoldingCtx(BaseModel):
         return v[:120]
 
 
-class RecAsset(BaseModel):
-    ticker: str
+class RecAsset(_Strict):
+    ticker: Annotated[str, StringConstraints(max_length=24)]
     weightPct: float = 0
 
 
-class RecClass(BaseModel):
-    cls: str = Field(alias="class")
+class RecClass(_Strict):
+    cls: Short = Field(alias="class")
     allocationPct: float = 0
-    assets: list[RecAsset] = []
+    assets: list[RecAsset] = Field(default=[], max_length=30)
 
     model_config = {"populate_by_name": True}
 
 
-class CompareCtx(BaseModel):
+class CompareCtx(_Strict):
     """Rule outcome for one product the user asked to compare; the model explains it, never changes it."""
 
-    symbol: str
-    name: str = ""
-    cls: str = Field(default="", alias="class")
+    symbol: Annotated[str, StringConstraints(max_length=24)]
+    name: Short = ""
+    cls: Short = Field(default="", alias="class")
     eligible: bool = True
-    gate: str = ""
+    gate: Short = ""
     score: float = 0
     rank: int = 0
     return1y: float = 0
@@ -96,14 +111,14 @@ class CompareCtx(BaseModel):
     model_config = {"populate_by_name": True}
 
 
-class NewsCtx(BaseModel):
+class NewsCtx(_Strict):
     """A recent market article the backend picked; the advisor may cite it when documents fall short."""
 
-    title: str
-    source: str = ""
-    url: str = ""
-    publishedAt: str = ""
-    summary: str = ""
+    title: str = Field(max_length=5000)
+    source: str = Field(default="", max_length=500)
+    url: str = Field(default="", max_length=2000)
+    publishedAt: str = Field(default="", max_length=100)
+    summary: str = Field(default="", max_length=20000)
 
     @field_validator("title", "summary", mode="after")
     @classmethod
@@ -114,18 +129,25 @@ class NewsCtx(BaseModel):
 
 class UserContext(_NullAsMissing):
     profile: ProfileCtx | None = None
-    holdings: list[HoldingCtx] = []
-    recommended: list[RecClass] = []
+    holdings: list[HoldingCtx] = Field(default=[], max_length=100)
+    recommended: list[RecClass] = Field(default=[], max_length=12)
     comparison: list[CompareCtx] = Field(default=[], max_length=4)
     news: list[NewsCtx] = Field(default=[], max_length=8)
 
 
-class ChatRequest(BaseModel):
+class ChatRequest(_Strict):
     message: str = Field(min_length=1, max_length=1000)
     lang: Literal["id", "en"] = "id"
     history: list[Turn] = Field(default=[], max_length=12)
     userContext: UserContext = UserContext()
     runId: str | None = Field(default=None, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+
+    @field_validator("message")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("message must not be blank")
+        return v
 
 
 class Citation(BaseModel):
