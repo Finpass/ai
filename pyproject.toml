@@ -66,6 +66,8 @@ select = ["E", "F", "I", "B", "UP", "SIM", "ASYNC", "S"]
 "src/features/advisor_chat/**" = ["E501"]
 "src/domain/advisor_chat/**" = ["E501"]
 "src/infrastructure/advisor_chat/**" = ["E501", "S608"]
+"src/infrastructure/observability/tracing.py" = ["E501"]  # the docstring is a span-tree diagram
+"tests/test_tracing.py" = ["E501"]
 
 [tool.mypy]
 strict = true

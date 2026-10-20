@@ -41,6 +41,24 @@ class Settings(BaseSettings):
     rag_llm_titles: bool = True
     rag_max_concurrent: int = 8
 
+    # Tracing (Arize Phoenix). On when an endpoint is set, unless TRACING_ENABLED says otherwise.
+    tracing_enabled: bool | None = None
+    # http://localhost:6006 for a local Phoenix, or the Phoenix Cloud space URL
+    phoenix_collector_endpoint: str = ""
+    phoenix_api_key: str = ""  # Phoenix Cloud or an authenticated Phoenix; empty for a local one
+    phoenix_project_name: str = "finpass-ai"
+    # Export prompts, questions and answers. None means: yes in development, no in production,
+    # because prompts carry a person's financial data. Metadata (model, tokens, cost, scores,
+    # timings) is always exported.
+    tracing_capture_content: bool | None = None
+    service_version: str = "0.1.0"
+
+    @property
+    def tracing_active(self) -> bool:
+        if self.tracing_enabled is not None:
+            return self.tracing_enabled and bool(self.phoenix_collector_endpoint)
+        return bool(self.phoenix_collector_endpoint)
+
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"
