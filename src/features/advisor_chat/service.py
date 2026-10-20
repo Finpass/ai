@@ -2,6 +2,7 @@ import asyncio
 import logging
 import re
 import uuid
+import weakref
 
 from src.core.config import settings
 from src.domain.advisor_chat import facts, guardrail
@@ -28,12 +29,44 @@ FALLBACK_HEAD = {
 }
 
 
-_TAGS = re.compile(r"</?\s*(?:fakta|sumber)\s*>", re.IGNORECASE)
+BLOCKED = {
+    "id": "Saya hanya bisa membantu pertanyaan seputar regulasi OJK, edukasi investasi, laporan keuangan emiten, dan data portofolio kamu.",
+    "en": "I can only help with OJK regulation, investment education, issuer financial statements, and your portfolio data.",
+}
+
+# also matches attributes, spaces and a missing ">": any of them could still read as a tag to the model
+_TAGS = re.compile(r"<\s*/?\s*(?:fakta|sumber)\b[^>]{0,200}>?", re.IGNORECASE)
+
+# at most this many questions reach the model at once; the rest wait their turn
+_slots: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore]" = weakref.WeakKeyDictionary()
+
+
+def _slot() -> asyncio.Semaphore:
+    loop = asyncio.get_running_loop()
+    if loop not in _slots:
+        _slots[loop] = asyncio.Semaphore(settings.rag_max_concurrent)
+    return _slots[loop]
 
 
 def _fence(text: str) -> str:
     """Untrusted text (news, documents) cannot close or reopen the blocks the prompt tells the model to treat as data."""
-    return _TAGS.sub("", text)
+    return _TAGS.sub("", guardrail.fold(text))
+
+
+def _scrubbed(req: ChatRequest) -> ChatRequest:
+    """National ids, emails and phone numbers never leave for the model or the search, whatever the user typed."""
+    ctx = req.userContext
+    if ctx.profile and ctx.profile.goal:
+        ctx = ctx.model_copy(
+            update={"profile": ctx.profile.model_copy(update={"goal": guardrail.scrub(ctx.profile.goal)})}
+        )
+    return req.model_copy(
+        update={
+            "message": guardrail.scrub(req.message),
+            "history": [t.model_copy(update={"content": guardrail.scrub(t.content)}) for t in req.history],
+            "userContext": ctx,
+        }
+    )
 
 
 def _messages(req: ChatRequest, passages: list[Passage], fix: str = "") -> list[dict[str, str]]:
@@ -103,7 +136,7 @@ def _strip_note(text: str) -> str:
 
 def _with_note(answer: str, lang: str) -> str:
     """Every answer ends with the same fixed disclaimer, written by us and not by the model."""
-    return f"{_strip_note(answer)}\n\n{load(f'advisor_chat_disclaimer_{lang}')}"
+    return f"{guardrail.clean(_strip_note(answer))}\n\n{load(f'advisor_chat_disclaimer_{lang}')}"
 
 
 # plain fallbacks: used when the model cannot write a title, or is not configured at all
@@ -137,8 +170,9 @@ TITLES = {
 
 async def chat(req: ChatRequest, llm: OpenRouterClient | None) -> ChatResponse:
     """Runs the pipeline and attaches the turn trail (also readable live through the turn buffer)."""
+    req = _scrubbed(req)
     run = req.runId or str(uuid.uuid4())
-    nar = Narrator(run, req.lang, req.message, llm)
+    nar = Narrator(run, req.lang, req.message, None if guardrail.is_injection(req.message) else llm)
     ctx = req.userContext
     with tracing.span(
         "advisor_chat",
@@ -158,7 +192,8 @@ async def chat(req: ChatRequest, llm: OpenRouterClient | None) -> ChatResponse:
             llm_configured=llm is not None,
         )
         try:
-            resp = await _chat(req, llm, nar)
+            async with _slot():
+                resp = await _chat(req, llm, nar)
         except Exception:
             await nar.drain()
             turn_buffer.emit(run, TITLES[req.lang]["error"], type="error", status="failed")
@@ -208,6 +243,18 @@ def _finish(nar: Narrator, lang: str, resp: ChatResponse) -> ChatResponse:
 
 async def _chat(req: ChatRequest, llm: OpenRouterClient | None, nar: Narrator) -> ChatResponse:
     t = TITLES[req.lang]
+    if guardrail.is_injection(req.message):  # an attempt to rewrite the rules gets no model call at all
+        return _finish(
+            nar,
+            req.lang,
+            ChatResponse(
+                answer=BLOCKED[req.lang],
+                citations=[],
+                grounded=False,
+                source="fallback",
+                trace=Trace(intent="blocked", tickers=[], chunkIds=[], topScore=0.0),
+            ),
+        )
     nar.say("read", "pertanyaan pengguna diterima", t["read"])
     nar.say(
         "search", "mencari di regulasi dan edukasi OJK serta laporan keuangan emiten", t["search"]

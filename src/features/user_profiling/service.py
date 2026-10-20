@@ -12,6 +12,8 @@ from src.infrastructure.prompt.loader import load
 
 logger = logging.getLogger("profile")
 
+# the wording is shown as plain text, so markup or script links mean the model was steered
+_MARKUP = re.compile(r"<\s*/?\s*[a-zA-Z!]|!\[|javascript:", re.IGNORECASE)
 _KEYS = ("summary", "risk", "ladder", "health", "nextStep")
 _MAX_LEN = 1200
 
@@ -27,7 +29,7 @@ def _parse(content: str) -> dict[str, str] | None:
     out: dict[str, str] = {}
     for k in _KEYS:
         v = data.get(k)
-        if not isinstance(v, str) or not v.strip() or len(v) > _MAX_LEN:
+        if not isinstance(v, str) or not v.strip() or len(v) > _MAX_LEN or _MARKUP.search(v):
             return None
         out[k] = v.strip()
     return out
