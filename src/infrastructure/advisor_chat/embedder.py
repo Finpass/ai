@@ -8,6 +8,7 @@ import httpx
 import numpy as np
 
 from src.core.config import settings
+from src.infrastructure.observability import tracing
 
 logger = logging.getLogger("rag.models")
 _lock = threading.Lock()
@@ -89,7 +90,10 @@ def _embed_batch(
             response = None
 
         if response is not None and response.status_code < 400:
-            return _parse(batch, response.json())
+            body = response.json()
+            vectors = _parse(batch, body)
+            tracing.current().usage(body.get("usage") if isinstance(body, dict) else None, kind=tracing.EMBEDDING)
+            return vectors
 
         retryable = response is None or response.status_code == 429 or response.status_code >= 500
         if not retryable or attempt == attempts - 1:
@@ -105,9 +109,12 @@ def embed(texts: list[str], batch_size: int = 16, *, fast: bool = False) -> list
     attempts, timeout = (2, 10.0) if fast else (MAX_ATTEMPTS, REQUEST_TIMEOUT_SECONDS)
     vectors: list[list[float]] = []
 
-    with httpx.Client(timeout=timeout) as http:
-        for start in range(0, len(texts), batch_size):
-            vectors.extend(_embed_batch(http, texts[start : start + batch_size], attempts))
+    with tracing.embedding_span(texts, model=EMBED_MODEL, dimensions=EMBED_DIMENSIONS) as t:
+        t.metadata(fast=fast, batch_size=batch_size)
+        with httpx.Client(timeout=timeout) as http:
+            for start in range(0, len(texts), batch_size):
+                vectors.extend(_embed_batch(http, texts[start : start + batch_size], attempts))
+        t.ok()
 
     return vectors
 
